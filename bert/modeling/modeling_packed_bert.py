@@ -358,16 +358,13 @@ class PackedBertEmbeddings(nn.Module):
         super().__init__()
         hidden_size = config.hidden_size
         embedding_size = config.per_layer_config[0].input_dim
-        self.word_embeddings = nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
-        self.position_embeddings = nn.Embedding(config.max_position_embeddings, hidden_size)
-        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, hidden_size)
+        self.word_embeddings = nn.Embedding(config.vocab_size, embedding_size, padding_idx=config.pad_token_id)
+        self.position_embeddings = nn.Embedding(config.max_position_embeddings, embedding_size)
+        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, embedding_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = nn.Sequential(
-            nn.Linear(hidden_size, embedding_size),
-            PackedLayerNorm(hidden_size, embedding_size, eps=config.layer_norm_eps)
-        )
+        self.LayerNorm = PackedLayerNorm(hidden_size, embedding_size, eps=config.layer_norm_eps)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized

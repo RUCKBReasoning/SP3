@@ -38,7 +38,7 @@ def get_packed_bert_config(model: Models):
     p_config = PackedBertConfig(**vars(config))
 
     per_layer_config = []
-    past_layer_norm = model.bert.embeddings.LayerNorm[1]
+    past_layer_norm = model.bert.embeddings.LayerNorm
     for layer in model.bert.encoder.layer:
         attn_output_norm = layer.attention.output.LayerNorm
         ffn_output_norm = layer.output.LayerNorm
@@ -102,6 +102,25 @@ class LinearMixer:
 
     def unwrap(self) -> nn.Linear:
         return self.linear
+
+
+class EmbeddingMixer:
+    
+    def __init__(self, embedding: nn.Embedding) -> None:
+        self.embedding = embedding
+    
+    @torch.no_grad()
+    def merge(self, other: nn.Linear, use_bias: bool = False):
+        num_embeddings = self.embedding.num_embeddings
+        embedding_dim = other.out_features
+        new_embedding = nn.Embedding(num_embeddings, embedding_dim)
+        new_embedding.weight.copy_(self.embedding.weight @ other.weight.T)
+        if use_bias and other.bias is not None:
+            new_embedding.weight += other.bias[None]
+        return EmbeddingMixer(new_embedding)
+    
+    def unwrap(self) -> nn.Embedding:
+        return self.embedding
 
 
 class CompactorMixer:
@@ -210,11 +229,23 @@ class CompactorMixer:
         last_values, last_indices = last_norm.mask.parse()
 
         assert self.model.bert.pooler is not None
+        
+        first_in_comp = first_norm.in_comp.extract("output", first_indices, first_values)
+        first_norm = first_norm.extract(first_indices)
+        
+        embeddings = self.model.bert.embeddings
+        
+        embeddings.word_embeddings = EmbeddingMixer(embeddings.word_embeddings)\
+            .merge(first_in_comp, use_bias=True)\
+            .unwrap()
+        embeddings.position_embeddings = EmbeddingMixer(embeddings.position_embeddings)\
+            .merge(first_in_comp)\
+            .unwrap()
+        embeddings.token_type_embeddings = EmbeddingMixer(embeddings.token_type_embeddings)\
+            .merge(first_in_comp)\
+            .unwrap()
 
-        self.model.bert.embeddings.LayerNorm = nn.Sequential(
-            first_norm.in_comp.extract("output", first_indices, first_values),
-            first_norm.extract(first_indices)
-        )
+        embeddings.LayerNorm = first_norm
         self.model.bert.pooler.dense = LinearMixer(
                 last_norm.out_comp.extract("input", last_indices, last_values)
             )\
