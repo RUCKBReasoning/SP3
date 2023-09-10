@@ -40,9 +40,12 @@ class DistillTrainerCallback(TrainerCallback):
         self.args = args
         self.trainer = trainer
         self.pruning_start_epoch = self.args.pruning_start_epoch
+        self.structural_pruning_start_epoch = self.args.structural_pruning_start_epoch
         self.pruning_warmup_epoch = self.args.pruning_warmup_epoch
         self.pruning_steps = 0
+        self.pruning_steps_stage2 = 0
         self.pruning_warmup_steps = None
+
     
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         train_dataloader = self.trainer.get_train_dataloader()
@@ -52,14 +55,26 @@ class DistillTrainerCallback(TrainerCallback):
         self.pruning_warmup_steps = self.pruning_warmup_epoch * num_update_steps_per_epoch       
 
     def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        if state.epoch >= self.pruning_start_epoch:
-            self.trainer.reg_switch = True
-            self.trainer.set_reg_params_state(True)
-        
+        if state.epoch >= self.pruning_start_epoch \
+            and state.epoch < self.structural_pruning_start_epoch:
+            if self.trainer.reg_switch is False:
+                self.trainer.reg_switch = True
+                self.trainer.set_reg_params_state(True)
+        elif state.epoch >= self.structural_pruning_start_epoch:
+            if self.trainer.structural_switch is False:
+                self.trainer.structural_switch = True
+                self.trainer.start_sparsity = self.args.target_sparsity
+                self.trainer.target_sparsity = self.args.structural_target_sparsity
+                self.trainer.set_reg_structural_params_state(True)
+
     def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        if state.epoch >= self.pruning_start_epoch:
+        if state.epoch >= self.pruning_start_epoch \
+            and state.epoch < self.structural_pruning_start_epoch:
             self.pruning_steps += 1
             self.trainer.reg_warmup_percent = min(1.0, self.pruning_steps / self.pruning_warmup_steps)
+        elif state.epoch >= self.structural_pruning_start_epoch:
+            self.pruning_steps_stage2 += 1
+            self.trainer.reg_warmup_percent = min(1.0, self.pruning_steps_stage2 / self.pruning_warmup_steps)
 
 
 class DistillTrainer(DefaultTrainer):
@@ -93,12 +108,17 @@ class DistillTrainer(DefaultTrainer):
         self.kl_loss = nn.KLDivLoss(reduction="batchmean", log_target=True)
         self.mse_loss = nn.MSELoss()
 
+        self.start_sparsity = 1.
+        self.target_sparsity = self.args.target_sparsity
+
         self.reg_switch = False
+        self.structural_switch = False
         self.reg_warmup_percent = 0.
         self.reg_params = []
         self.reg_z_groups = []
         self.init_reg_params()
         self.set_reg_params_state(False)
+        self.set_reg_structural_params_state(False)
         
     def init_reg_params(self):
         for name, _ in self.model.named_parameters():
@@ -109,26 +129,38 @@ class DistillTrainer(DefaultTrainer):
         model: SModel = self.model
         past_layer_norm = model.bert.embeddings.LayerNorm
         for layer in model.bert.encoder.layer:
-            layer_mask0 = past_layer_norm.mask
-            layer_mask1 = layer.attention.output.LayerNorm.mask
-            layer_mask2 = layer.output.LayerNorm.mask
+            hidden_mask0 = past_layer_norm.mask
+            hidden_mask1 = layer.attention.output.LayerNorm.mask
+            hidden_mask2 = layer.output.LayerNorm.mask
             qk_mask = layer.attention.self.query.mask
             vo_mask = layer.attention.self.value.mask
-            ffn_mask = layer.output.dense.mask
+            filter_mask = layer.output.dense.mask
+            MHA_mask = layer.attention.output.mask
+            head_mask = layer.attention.self.mask
+            FFN_mask = layer.output.mask
             self.reg_z_groups.append((
-                (layer_mask0, qk_mask),
-                (layer_mask0, qk_mask),
-                (layer_mask0, vo_mask),
-                (vo_mask, layer_mask1),
-                (layer_mask1, ffn_mask),
-                (ffn_mask, layer_mask2),
+                hidden_mask0,
+                hidden_mask1,
+                hidden_mask2,
+                qk_mask,
+                vo_mask,
+                filter_mask,
+                MHA_mask,
+                head_mask,
+                FFN_mask,
             ))
             past_layer_norm = layer.output.LayerNorm
     
     def set_reg_params_state(self, activate: bool):
         for name, module in self.model.named_modules():
-            if isinstance(module, Mask):
+            if isinstance(module, Mask) and module.features > self.model.config.num_attention_heads:
                 module.set_state(activate)
+    
+    def set_reg_structural_params_state(self, activate: bool):
+        for name, module in self.model.named_modules():
+            if isinstance(module, Mask) and module.features <= self.model.config.num_attention_heads:
+                module.set_state(activate)
+                print("set {} with state: [{}]".format(name, activate))
 
     def create_optimizer(self):
         """
@@ -269,80 +301,120 @@ class DistillTrainer(DefaultTrainer):
             torch.log_softmax(t_logits / T, dim=-1),
         )
         
-        assert len(t_hidden_states) % len(s_hidden_states) == 0
-
-        _layer_loss = []
-        step_size = len(t_hidden_states) // len(s_hidden_states)
+        assert len(t_hidden_states) == len(s_hidden_states)
+        
         proj = model.bert.distill_projection
-        for t_h, s_h in zip(
-            t_hidden_states[step_size-1::step_size], 
-            s_hidden_states
-        ):
-            _layer_loss.append(
-                self.mse_loss(
-                    self.mask_select(t_h, mask),
-                    proj(self.mask_select(s_h, mask))
-                )
-            )
+        t_hidden_states = [self.mask_select(t_h, mask) for t_h in t_hidden_states]
+        s_hidden_states = [proj(self.mask_select(s_h, mask)) for s_h in s_hidden_states]
+        
+        match_index = []
+        with torch.no_grad():
+            T = torch.stack(t_hidden_states).unsqueeze(0)
+            S = torch.stack(s_hidden_states).unsqueeze(1)
+            dist = (T - S).pow(2.).mean(-1).mean(-1)  # dist[i, j] = || S_i - T_j ||
+            assert len(dist.shape) == 2
+        
+        num_layers = len(s_hidden_states)
+        for i in range(num_layers):
+            match_index.append(dist[i, i:].argmin().item() + i)
+        
+        _layer_loss = []
+        for i, s_h in enumerate(s_hidden_states):
+            t_h = t_hidden_states[match_index[i]]
+            _layer_loss.append(self.mse_loss(t_h, s_h))
         layer_loss = torch.stack(_layer_loss).sum()
         
         distill_loss = alpha_1 * pred_loss + alpha_2 * layer_loss
         
         return distill_loss
-
     
     def compute_target_sparsity(self):
-        start_sparsity = 1.0
-        target_sparsity = self.args.target_sparsity
+        start_sparsity = self.start_sparsity
+        target_sparsity = self.target_sparsity
         t_bar = self.reg_warmup_percent * (target_sparsity - start_sparsity) + start_sparsity
         return t_bar
 
-
     def compute_lagrangian_loss(self):
         if self.reg_switch:
-            num_layers = self.model.config.num_hidden_layers
-            hidden_size = self.model.config.hidden_size
-            ffn_size = self.model.config.intermediate_size
-            M = (hidden_size * hidden_size * 4 + hidden_size * ffn_size * 2) * num_layers
+            s = self.compute_sparsity()
+            t = self.compute_target_sparsity()
+
             lambda_1 = self.model.bert.reg_lambda_1
             lambda_2 = self.model.bert.reg_lambda_2
-            params = []
-            for mask_group in self.reg_z_groups:
-                for in_mask, out_mask in mask_group:
-                    params.append(torch.outer(in_mask.L(), out_mask.L()).sum())
-            s = torch.stack(params).sum() / M
-            t = self.compute_target_sparsity()
-            
             lagrangian_loss = lambda_1 * (s - t) + lambda_2 * torch.pow(s - t, 2.)
             return lagrangian_loss
         else:
             return None
 
-    @torch.no_grad()
     def compute_sparsity(self):
         num_layers = self.model.config.num_hidden_layers
+        num_heads = self.model.config.num_attention_heads
         hidden_size = self.model.config.hidden_size
         ffn_size = self.model.config.intermediate_size
         M = (hidden_size * hidden_size * 4 + hidden_size * ffn_size * 2) * num_layers
         params = []
         for mask_group in self.reg_z_groups:
-            for in_mask, out_mask in mask_group:
-                params.append(torch.outer(in_mask.L(), out_mask.L()).sum())
+            hidden_mask0, \
+            hidden_mask1, \
+            hidden_mask2, \
+            qk_mask, \
+            vo_mask, \
+            filter_mask, \
+            MHA_mask, \
+            head_mask, \
+            FFN_mask = mask_group
+
+            MHA_mask_L = MHA_mask.L() if self.structural_switch \
+                else torch.tensor([1.0]).type_as(MHA_mask.log_alpha)
+            # head_mask_L = head_mask.L() if self.structural_switch \
+            #     else torch.tensor([1.0]).type_as(head_mask.log_alpha)
+            head_mask_L = torch.tensor([1.0]).type_as(head_mask.log_alpha)
+
+            FFN_mask_L = FFN_mask.L() if self.structural_switch \
+                else torch.tensor([1.0]).type_as(FFN_mask.log_alpha)
+            for in_mask, out_mask in (
+                (hidden_mask0, qk_mask),
+                (hidden_mask0, qk_mask),
+                (hidden_mask0, vo_mask),
+                (hidden_mask1, vo_mask),
+            ):
+                H = in_mask.features
+                W = out_mask.features
+                mask = torch.outer(in_mask.L(), out_mask.L())
+                mask = mask.reshape(H, num_heads, W // num_heads)
+                mask = mask * head_mask_L[None, :, None]
+                mask = mask * MHA_mask_L
+                params.append(mask.sum())
+            for in_mask, out_mask in (
+                (hidden_mask1, filter_mask),
+                (hidden_mask2, filter_mask),
+            ):
+                params.append((torch.outer(in_mask.L(), out_mask.L()) * FFN_mask_L).sum())
         s = torch.stack(params).sum() / M
         return s
 
     @torch.no_grad()
     def compute_per_layer_sparsity(self):
         model: SModel = self.model
-        sparsities = []
+        h_sparsities = []
+        b_sparsities = []
         past_layer_norm = model.bert.embeddings.LayerNorm
-        sparsities.append(past_layer_norm.mask.L().sum().item() / past_layer_norm.mask.features)
+        h_sparsities.append(past_layer_norm.mask.L().sum().item() / past_layer_norm.mask.features)
         for layer in model.bert.encoder.layer:
             attn_norm = layer.attention.output.LayerNorm
             ffn_norm = layer.output.LayerNorm
-            sparsities.append(attn_norm.mask.L().sum().item() / attn_norm.mask.features)
-            sparsities.append(ffn_norm.mask.L().sum().item() / ffn_norm.mask.features)
-        return sparsities
+            h_sparsities.append(attn_norm.mask.L().sum().item() / attn_norm.mask.features)
+            h_sparsities.append(ffn_norm.mask.L().sum().item() / ffn_norm.mask.features)
+        for mask_group in self.reg_z_groups:
+            MHA_mask, \
+            head_mask, \
+            FFN_mask = mask_group[-3:]
+            b_sparsities.append((
+                MHA_mask.L().sum().item() / MHA_mask.features,
+                head_mask.L().sum().item() / head_mask.features,
+                FFN_mask.L().sum().item() / FFN_mask.features,
+            ))
+        return h_sparsities, b_sparsities
 
     def evaluate(self, 
         eval_dataset: Optional[Dataset] = None, 
@@ -350,16 +422,17 @@ class DistillTrainer(DefaultTrainer):
         metric_key_prefix: str = "eval"
     ) -> Dict[str, float]:
         with torch.no_grad():
-            lambda_1 = self.model.bert.reg_lambda_1
-            lambda_2 = self.model.bert.reg_lambda_2
+            lambda_1 = self.model.bert.reg_lambda_1.item()
+            lambda_2 = self.model.bert.reg_lambda_2.item()
             sparsity = self.compute_sparsity()
             t_sparsity = self.compute_target_sparsity()
-            per_layer_sparsity = self.compute_per_layer_sparsity()
+            per_layer_h_sparsity, per_layer_b_sparsity = self.compute_per_layer_sparsity()
             lagrangian_loss = self.compute_lagrangian_loss()
             logger.info("lambda-1: {}".format(lambda_1))
             logger.info("lambda-2: {}".format(lambda_2))
             logger.info("sparsity = {}".format(sparsity))
             logger.info("t_sparsity = {}".format(t_sparsity))
-            logger.info("per_layer_sparsity = {}".format(per_layer_sparsity))
+            logger.info("per_layer_h_sparsity = {}".format(per_layer_h_sparsity))
+            logger.info("per_layer_b_sparsity = {}".format(per_layer_b_sparsity))
             logger.info("lagrangian_loss = {}".format(lagrangian_loss))
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)

@@ -78,7 +78,7 @@ class Mask(nn.Module):
             else:
                 return self.deterministic_z()
         else:
-            return 1.
+            return torch.ones((self.features,)).type_as(self.log_alpha)
 
     @torch.no_grad()
     def parse(self):
@@ -340,5 +340,5 @@ class LinearWithMaskBefore(nn.Linear):
         new_linear = nn.Linear(**self.kw_args)        
         new_linear.weight.copy_(self.weight[:, indices] @ values)
         if new_linear.bias is not None:
-            new_linear.bias.copy_(self.bias)
+            new_linear.bias.copy_(self.bias)        
         return new_linear

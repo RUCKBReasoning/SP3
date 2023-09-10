@@ -420,6 +420,62 @@ class PackedBertEmbeddings(nn.Module):
         return embeddings
 
 
+class PrunedLinear(nn.Module):  # y = 0 * x + b
+    def __init__(self, features: int) -> None:
+        super().__init__()
+        # self.dense = 0 matrix
+        self.bias = nn.Parameter(torch.zeros((features,)))
+    
+    def forward(self) -> torch.Tensor:
+        return self.bias
+
+
+class PrunedBertSelfOutput(nn.Module):
+    def __init__(self, config, layer_config: PackedBertLayerConfig):
+        super().__init__()    
+        self.residual = nn.Linear(layer_config.input_dim, layer_config.attn_output_dim)
+        self.dense = PrunedLinear(layer_config.attn_output_dim)
+
+        self.LayerNorm = PackedLayerNorm(
+            config.hidden_size,
+            layer_config.attn_output_dim,
+            eps=config.layer_norm_eps
+        )
+    
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        input_tensor = self.residual(input_tensor)
+        hidden_states = self.LayerNorm(self.dense() + input_tensor)
+        return hidden_states
+
+
+class PrunedBertAttention(nn.Module):
+    def __init__(self, config, layer_config: PackedBertLayerConfig, position_embedding_type=None):
+        super().__init__()
+        assert config.is_decoder == False
+        self.output = PrunedBertSelfOutput(config, layer_config)
+    
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.FloatTensor] = None,
+            head_mask: Optional[torch.FloatTensor] = None,
+            encoder_hidden_states: Optional[torch.FloatTensor] = None,
+            encoder_attention_mask: Optional[torch.FloatTensor] = None,
+            past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+            output_attentions: Optional[bool] = False,
+    ) -> Tuple[torch.Tensor]:
+        self_outputs = (None, None) if output_attentions else (None,)
+
+        # self.config.is_decoder ==> False
+        # if self.config.is_decoder:  
+        #     outputs = outputs + (past_key_value,)
+
+        attention_output = self.output(hidden_states)
+
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        return outputs
+
+
 class PackedBertSelfAttention(nn.Module):
     def __init__(self, config, layer_config: PackedBertLayerConfig, position_embedding_type=None):
         super().__init__()
@@ -598,6 +654,33 @@ class PackedBertAttention(nn.Module):
         return outputs
 
 
+class PrunedBertIntermediate(nn.Module):
+    def __init__(self, config, layer_config: PackedBertLayerConfig):
+        super().__init__()
+    
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return hidden_states
+
+
+class PrunedBertOutput(nn.Module):
+    def __init__(self, config, layer_config: PackedBertLayerConfig):
+        super().__init__()
+        self.residual = nn.Linear(
+            layer_config.attn_output_dim, layer_config.ffn_output_dim)
+        self.dense = PrunedLinear(layer_config.ffn_output_dim)
+        self.LayerNorm = PackedLayerNorm(
+            config.hidden_size,
+            layer_config.ffn_output_dim,
+            eps=config.layer_norm_eps
+        )
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+        input_tensor = self.residual(input_tensor)
+        hidden_states = self.LayerNorm(self.dense() + input_tensor)
+        return hidden_states
+
+
 class PackedBertIntermediate(nn.Module):
     def __init__(self, config, layer_config: PackedBertLayerConfig):
         super().__init__()
@@ -640,13 +723,20 @@ class PackedBertLayer(nn.Module):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = PackedBertAttention(config, layer_config)
+        if layer_config.prune_attn:
+            self.attention = PrunedBertAttention(config, layer_config)
+        else:
+            self.attention = PackedBertAttention(config, layer_config)
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
             raise ValueError("not support cross attention")
-        self.intermediate = PackedBertIntermediate(config, layer_config)
-        self.output = PackedBertOutput(config, layer_config)
+        if layer_config.prune_ffn:
+            self.intermediate = PrunedBertIntermediate(config, layer_config)
+            self.output = PrunedBertOutput(config, layer_config)            
+        else:
+            self.intermediate = PackedBertIntermediate(config, layer_config)
+            self.output = PackedBertOutput(config, layer_config)
 
     def forward(
             self,

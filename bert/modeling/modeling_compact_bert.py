@@ -469,20 +469,21 @@ class CompactBertSelfAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
+        self.mask = Mask(self.num_attention_heads)  # Mask of each attention head
 
-        mask_q = Mask(self.attention_head_size, self.num_attention_heads)
-        mask_v = Mask(self.attention_head_size, self.num_attention_heads)
+        q_mask = Mask(self.attention_head_size, self.num_attention_heads)
+        v_mask = Mask(self.attention_head_size, self.num_attention_heads)
         
-        comp_q = Compactor(config.hidden_size, mask_pos="output", mask=mask_q)
-        comp_k = Compactor(config.hidden_size, mask_pos="no")
-        comp_v = Compactor(config.hidden_size, mask_pos="output", mask=mask_v)
+        q_comp = Compactor(config.hidden_size, mask_pos="output", mask=q_mask)
+        k_comp = Compactor(config.hidden_size, mask_pos="no")
+        v_comp = Compactor(config.hidden_size, mask_pos="output", mask=v_mask)
 
         self.query = LinearWithCompactorAfter(
-            config.hidden_size, config.hidden_size, compactor=comp_q, mask=mask_q)
+            config.hidden_size, config.hidden_size, compactor=q_comp, mask=q_mask)
         self.key = LinearWithCompactorAfter(
-            config.hidden_size, config.hidden_size, compactor=comp_k)
+            config.hidden_size, config.hidden_size, compactor=k_comp)
         self.value = LinearWithCompactorAfter(
-            config.hidden_size, config.hidden_size, compactor=comp_v, mask=mask_v)
+            config.hidden_size, config.hidden_size, compactor=v_comp, mask=v_mask)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.position_embedding_type = position_embedding_type or getattr(
@@ -494,7 +495,7 @@ class CompactBertSelfAttention(nn.Module):
 
         self.is_decoder = config.is_decoder
 
-    def transpose_for_scores(self, x: torch.Tensor, is_value: bool = False) -> torch.Tensor:
+    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
@@ -523,8 +524,8 @@ class CompactBertSelfAttention(nn.Module):
         elif past_key_value is not None:
             raise
         else:
-            key_layer = self.transpose_for_scores(self.key(hidden_states), is_value=False)
-            value_layer = self.transpose_for_scores(self.value(hidden_states), is_value=True)
+            key_layer = self.transpose_for_scores(self.key(hidden_states))
+            value_layer = self.transpose_for_scores(self.value(hidden_states))
 
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
@@ -574,7 +575,8 @@ class CompactBertSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = torch.matmul(attention_probs, value_layer)
+        context_layer = torch.matmul(attention_probs, value_layer)  # [batch, head, seq_length, hidden_size]
+        # context_layer = context_layer * self.mask()[None, :, None, None]
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
@@ -590,6 +592,7 @@ class CompactBertSelfAttention(nn.Module):
 class CompactBertSelfOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.mask = Mask(1)  # Mask of Multi-head Attention
         compactor = Compactor(config.hidden_size, mask_pos="no")
         self.dense = LinearWithCompactorBefore(
             config.hidden_size, config.hidden_size, compactor=compactor)
@@ -607,7 +610,7 @@ class CompactBertSelfOutput(nn.Module):
             input_tensor = self.residual(input_tensor)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states = self.LayerNorm(hidden_states * self.mask() + input_tensor)
         return hidden_states
 
 
@@ -682,6 +685,7 @@ class CompactBertIntermediate(nn.Module):
 class CompactBertOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.mask = Mask(1)  # Mask of FFN
         self.dense = LinearWithMaskBefore(
             config.intermediate_size, config.hidden_size)
         self.LayerNorm = LayerNormWithCompactor(
@@ -696,7 +700,7 @@ class CompactBertOutput(nn.Module):
             input_tensor = self.residual(input_tensor)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states = self.LayerNorm(hidden_states * self.mask() + input_tensor)
         return hidden_states
 
 
@@ -711,7 +715,9 @@ class CompactBertLayer(nn.Module):
         if self.add_cross_attention:
             raise ValueError("not support cross attention")
         self.intermediate = CompactBertIntermediate(config)
-        self.output = CompactBertOutput(config)
+        self.output = CompactBertOutput(config)        
+        self.prune_MHA = False
+        self.prune_FFN = False
 
     def forward(
             self,

@@ -4,10 +4,12 @@ import torch.nn as nn
 import numpy as np
 import math
 from datasets import Dataset
-from typing import Union, Tuple, Dict, List
+from typing import Union, Tuple, Dict, List, Optional
 from collections import defaultdict
 
 from .modeling_compact_bert import (
+    CompactBertAttention,
+    CompactBertSelfAttention,
     CompactBertLayer,
     CompactBertForSequenceClassification,
     CompactBertForQuestionAnswering
@@ -50,12 +52,12 @@ def get_packed_bert_config(model: Models):
             input_dim=past_layer_norm.packed_size,
             attn_output_dim=attn_output_norm.packed_size,
             ffn_output_dim=ffn_output_norm.packed_size,
-            num_heads=config.num_attention_heads,
+            num_heads=layer.attention.self.num_attention_heads,
             qk_dim=w_q.out_features,
             vo_dim=w_v.out_features,
             ffn_dim=w_0.out_features,
-            prune_attn=False,
-            prune_ffn=False
+            prune_attn=layer.prune_MHA,
+            prune_ffn=layer.prune_FFN,
         )
         per_layer_config.append(layer_config)        
         past_layer_norm = ffn_output_norm
@@ -99,6 +101,65 @@ class LinearMixer:
         if new_linear.bias is not None:
             new_linear.bias.copy_(self.linear.bias[indices])
         return LinearMixer(new_linear)
+    
+    @torch.no_grad()
+    def prune_qkv_head(self, 
+        num_heads: int,
+        head_indices: torch.Tensor, 
+        head_values: Optional[torch.Tensor] = None
+    ):
+        if head_values is None:
+            head_values = torch.ones_like(head_indices).type_as(self.linear.weight)
+        num_res_heads = head_indices.shape[0]
+        in_features = self.linear.in_features
+        out_features = self.linear.out_features
+        new_linear = nn.Linear(
+            in_features,
+            (out_features // num_heads) * num_res_heads,
+            self.linear.bias is not None
+        )
+        weight = self.linear.weight.view(num_heads, out_features // num_heads, in_features)
+        weight = (weight[head_indices] * head_values[:, None, None]).reshape(-1, in_features)
+        new_linear.weight.copy_(weight)
+        
+        bias = self.linear.bias.view(num_heads, out_features // num_heads) \
+            if self.linear.bias is not None else None
+        if bias is not None:
+            bias = (bias[head_indices] * head_values[:, None]).reshape(-1)
+            new_linear.bias.copy_(bias)
+        return LinearMixer(new_linear)
+    
+    @torch.no_grad()
+    def prune_o_head(self,
+        num_heads: int,
+        head_indices: torch.Tensor, 
+        head_values: Optional[torch.Tensor] = None        
+    ):
+        if head_values is None:
+            head_values = torch.ones_like(head_indices).type_as(self.linear.weight)
+        num_res_heads = head_indices.shape[0]
+        in_features = self.linear.in_features
+        out_features = self.linear.out_features
+        new_linear = nn.Linear(
+            (in_features // num_heads) * num_res_heads,
+            out_features,
+            self.linear.bias is not None
+        )
+
+        weight = self.linear.weight.view(out_features, num_heads, in_features // num_heads)
+        weight = (weight[:, head_indices, :] * head_values[None, :, None]).reshape(out_features, -1)
+        new_linear.weight.copy_(weight)
+        
+        bias = self.linear.bias if self.linear.bias is not None else None
+        if bias is not None:
+            new_linear.bias.copy_(bias)
+        return LinearMixer(new_linear)        
+    
+    def scale(self, scale: float):
+        self.linear.weight.mul_(scale)
+        if self.linear.bias is not None:
+            self.linear.bias.mul_(scale)
+        return self
 
     def unwrap(self) -> nn.Linear:
         return self.linear
@@ -155,14 +216,25 @@ class CompactorMixer:
 
             norm0: LayerNormWithCompactor = past_layer_norm
             norm1: LayerNormWithCompactor = module.attention.output.LayerNorm
-            norm2: LayerNormWithCompactor = module.output.LayerNorm                
-
+            norm2: LayerNormWithCompactor = module.output.LayerNorm
+            
             norm0_values, norm0_indices = norm0.mask.parse()
             norm1_values, norm1_indices = norm1.mask.parse()
             norm2_values, norm2_indices = norm2.mask.parse()
             qk_values, qk_indices = q_module.mask.parse()
             vo_values, vo_indices = v_module.mask.parse()
             ffn_values, ffn_indices = w2_module.mask.parse()
+            head_values, head_indices = module.attention.self.mask.parse()
+            MHA_z = module.attention.output.mask.deterministic_z()
+            FFN_z = module.output.mask.deterministic_z()
+            
+            # num_attention_heads = module.attention.self.num_attention_heads
+            # module.attention.self.num_attention_heads = head_indices.shape[0]
+
+            if MHA_z.item() <= 1e-3:
+                module.prune_MHA = True
+            if FFN_z.item() <= 1e-3:
+                module.prune_FFN = True
             
             # 1. update layer-norm
             module.attention.output.LayerNorm = \
@@ -177,20 +249,29 @@ class CompactorMixer:
                 .merge(q_module.extract())\
                 .merge(q_module.compactor.extract("output", qk_indices, qk_values))\
                 .unwrap()
+                # .prune_qkv_head(num_attention_heads, head_indices)\
+
             key = LinearMixer(norm0_out_comp)\
                 .merge(k_module.extract())\
                 .merge(k_module.compactor.extract("output", qk_indices))\
                 .unwrap()
+                # .prune_qkv_head(num_attention_heads, head_indices)\
+
             value = LinearMixer(norm0_out_comp)\
                 .merge(v_module.extract())\
                 .merge(v_module.compactor.extract("output", vo_indices, vo_values))\
                 .unwrap()
+                # .prune_qkv_head(num_attention_heads, head_indices, head_values)\
+
             output = LinearMixer(
                     o_module.compactor.extract("input", vo_indices)
                 )\
                 .merge(o_module.extract())\
+                .scale(MHA_z.item())\
                 .merge(norm1_in_comp)\
                 .unwrap()
+                # .prune_o_head(num_attention_heads, head_indices)\
+
 
             module.attention.self.query = query
             module.attention.self.key = key
@@ -205,6 +286,7 @@ class CompactorMixer:
                 .merge_mask(ffn_indices)\
                 .unwrap()
             w2 = LinearMixer(w2_module.extract(ffn_indices, ffn_values))\
+                .scale(FFN_z.item())\
                 .merge(norm2_in_comp)\
                 .unwrap()
             
@@ -255,6 +337,8 @@ class CompactorMixer:
         p_config = get_packed_bert_config(self.model)
         p_model: PModels = self.factory(p_config)
         p_model.load_state_dict(self.model.state_dict(), strict=False)
+        
+        print(p_model)
         
         return p_model
 
