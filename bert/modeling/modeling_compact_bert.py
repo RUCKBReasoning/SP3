@@ -518,14 +518,15 @@ class CompactBertSelfAttention(nn.Module):
         is_cross_attention = encoder_hidden_states is not None
 
         if is_cross_attention and past_key_value is not None:
-            raise
+            raise ValueError
         elif is_cross_attention:
-            raise
+            raise ValueError
         elif past_key_value is not None:
-            raise
+            raise ValueError
         else:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
             value_layer = self.transpose_for_scores(self.value(hidden_states))
+            value_layer = value_layer * self.mask()[None, :, None, None]
 
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
@@ -576,7 +577,6 @@ class CompactBertSelfAttention(nn.Module):
             attention_probs = attention_probs * head_mask
 
         context_layer = torch.matmul(attention_probs, value_layer)  # [batch, head, seq_length, hidden_size]
-        # context_layer = context_layer * self.mask()[None, :, None, None]
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)

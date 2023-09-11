@@ -366,10 +366,9 @@ class DistillTrainer(DefaultTrainer):
 
             MHA_mask_L = MHA_mask.L() if self.structural_switch \
                 else torch.tensor([1.0]).type_as(MHA_mask.log_alpha)
-            # head_mask_L = head_mask.L() if self.structural_switch \
-            #     else torch.tensor([1.0]).type_as(head_mask.log_alpha)
-            head_mask_L = torch.tensor([1.0]).type_as(head_mask.log_alpha)
-
+            head_mask_L = head_mask.L() if self.structural_switch \
+                else torch.tensor([1.0]).type_as(head_mask.log_alpha)
+            # head_mask_L = torch.tensor([1.0]).type_as(head_mask.log_alpha)
             FFN_mask_L = FFN_mask.L() if self.structural_switch \
                 else torch.tensor([1.0]).type_as(FFN_mask.log_alpha)
             for in_mask, out_mask in (

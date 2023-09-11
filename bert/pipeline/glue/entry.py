@@ -228,7 +228,6 @@ def run():
             s_model,
             train_dataset,
             data_collator,
-            training_args.target_sparsity
         ).initialize()
         torch.save(s_model.state_dict(), s_model_path)
     else:
@@ -273,23 +272,34 @@ def run():
         exit(0)
 
     p_model_path = os.path.join(training_args.output_dir, "pmodel.bin")
+    p_model_config_path = os.path.join(training_args.output_dir, "pmodel_config.bin")
     if training_args.mix_compactor:
         p_model: PModel = CompactorMixer(
             training_args,
             s_model,
             PModel,
         ).mix()
+        torch.save(p_model.config, p_model_config_path)
         torch.save(p_model.state_dict(), p_model_path)
     else:
-        p_config = get_packed_bert_config(training_args, config)
+        p_config = torch.load(p_model_config_path)
         p_model = PModel(p_config)
         p_model.load_state_dict(torch.load(p_model_path, map_location="cpu"))
     
-    evaluator = DefaultTrainer(
+    p_model.config.per_layer_config = None
+    training_args.num_train_epochs = 1.0
+    final_trainer = DefaultTrainer(
         p_model,
         args=training_args,
         tokenizer=tokenizer,
+        train_dataset=train_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    evaluate(training_args, datasets, evaluator, "eval_pmodel")
+    evaluate(training_args, datasets, final_trainer, "eval_pmodel")
+
+    final_trainer.train()
+
+    evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
+    
+    torch.save(p_model.state_dict(), os.path.join(training_args.output_dir, "pmodel_final.bin"))

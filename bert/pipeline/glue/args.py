@@ -48,8 +48,8 @@ class TrainingArguments(DefaultTrainingArguments):
     train_student: Optional[bool] = field(default=False)
     mix_compactor: Optional[bool] = field(default=False)
 
-    target_sparsity: Optional[float] = field(default=0.5)
-    structural_target_sparsity: Optional[float] = field(default=0.25)
+    target_sparsity: Optional[float] = field(default=0.20)
+    structural_target_sparsity: Optional[float] = field(default=0.05)
     # sparsity = (new params number) / (origin params number)
     
     distill_T: float = field(default=2.0)
@@ -58,7 +58,7 @@ class TrainingArguments(DefaultTrainingArguments):
     
     reg_learning_rate: float = field(default=1e-1)
     
-    distill_num_train_epochs: float = field(default=10.0, metadata={"help": "Total number of training epochs to perform."})
+    distill_num_train_epochs: float = field(default=12.0, metadata={"help": "Total number of training epochs to perform."})
     distill_learning_rate: float = field(default=2e-5, metadata={"help": "The initial learning rate for AdamW."})
     
     pruning_start_epoch: int = field(default=2)
@@ -82,9 +82,10 @@ class TrainingArguments(DefaultTrainingArguments):
     )
     
     def get_file_name(self):
-        return "[{}]-[{}]".format(
+        return "[{}]-[{}]-[{:.2f}]".format(
             self.dataset_name,
-            self.task_name
+            self.task_name,
+            self.structural_target_sparsity
         )
     
     def __post_init__(self):

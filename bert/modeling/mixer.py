@@ -123,7 +123,7 @@ class LinearMixer:
         new_linear.weight.copy_(weight)
         
         bias = self.linear.bias.view(num_heads, out_features // num_heads) \
-            if self.linear.bias is not None else None
+                    if self.linear.bias is not None else None
         if bias is not None:
             bias = (bias[head_indices] * head_values[:, None]).reshape(-1)
             new_linear.bias.copy_(bias)
@@ -153,7 +153,7 @@ class LinearMixer:
         bias = self.linear.bias if self.linear.bias is not None else None
         if bias is not None:
             new_linear.bias.copy_(bias)
-        return LinearMixer(new_linear)        
+        return LinearMixer(new_linear)
     
     def scale(self, scale: float):
         self.linear.weight.mul_(scale)
@@ -203,6 +203,8 @@ class CompactorMixer:
         
         past_layer_norm = self.model.bert.embeddings.LayerNorm        
         num_layers = len(self.model.bert.encoder.layer)
+        num_heads = self.model.config.num_attention_heads
+
         for layer_id, module in tqdm(enumerate(self.model.bert.encoder.layer), total=num_layers):
             assert isinstance(module, CompactBertLayer)              
             # 0. get modules
@@ -228,8 +230,7 @@ class CompactorMixer:
             MHA_z = module.attention.output.mask.deterministic_z()
             FFN_z = module.output.mask.deterministic_z()
             
-            # num_attention_heads = module.attention.self.num_attention_heads
-            # module.attention.self.num_attention_heads = head_indices.shape[0]
+            module.attention.self.num_attention_heads = head_indices.shape[0]
 
             if MHA_z.item() <= 1e-3:
                 module.prune_MHA = True
@@ -248,20 +249,20 @@ class CompactorMixer:
             query = LinearMixer(norm0_out_comp)\
                 .merge(q_module.extract())\
                 .merge(q_module.compactor.extract("output", qk_indices, qk_values))\
+                .prune_qkv_head(num_heads, head_indices)\
                 .unwrap()
-                # .prune_qkv_head(num_attention_heads, head_indices)\
 
             key = LinearMixer(norm0_out_comp)\
                 .merge(k_module.extract())\
                 .merge(k_module.compactor.extract("output", qk_indices))\
+                .prune_qkv_head(num_heads, head_indices)\
                 .unwrap()
-                # .prune_qkv_head(num_attention_heads, head_indices)\
 
             value = LinearMixer(norm0_out_comp)\
                 .merge(v_module.extract())\
                 .merge(v_module.compactor.extract("output", vo_indices, vo_values))\
+                .prune_qkv_head(num_heads, head_indices, head_values)\
                 .unwrap()
-                # .prune_qkv_head(num_attention_heads, head_indices, head_values)\
 
             output = LinearMixer(
                     o_module.compactor.extract("input", vo_indices)
@@ -269,8 +270,8 @@ class CompactorMixer:
                 .merge(o_module.extract())\
                 .scale(MHA_z.item())\
                 .merge(norm1_in_comp)\
+                .prune_o_head(num_heads, head_indices)\
                 .unwrap()
-                # .prune_o_head(num_attention_heads, head_indices)\
 
 
             module.attention.self.query = query

@@ -39,7 +39,6 @@ class CompactorInitializer:
         model: Models,
         dataset: Dataset,
         data_collator: DataCollator,
-        target_sparsity: float,
         sample_token_size: int = 8,
         sample_data_size: int = 512,
         skip_num: int = 2,
@@ -57,7 +56,6 @@ class CompactorInitializer:
             "data_size": sample_data_size,
         }
         self.skip_num = skip_num
-        self.target_sparsity = target_sparsity
         self.handlers = []
     
     @torch.no_grad()
