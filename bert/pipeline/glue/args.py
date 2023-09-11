@@ -48,13 +48,13 @@ class TrainingArguments(DefaultTrainingArguments):
     train_student: Optional[bool] = field(default=False)
     mix_compactor: Optional[bool] = field(default=False)
 
-    target_sparsity: Optional[float] = field(default=0.20)
-    structural_target_sparsity: Optional[float] = field(default=0.05)
+    target_sparsity: Optional[float] = field(default=0.05)
+    structural_target_sparsity: Optional[float] = field(default=0.01)
     # sparsity = (new params number) / (origin params number)
     
     distill_T: float = field(default=2.0)
     distill_alpha_1: float = field(default=0.5)  # loss_pred
-    distill_alpha_2: float = field(default=1.0)  # loss_layer
+    distill_alpha_2: float = field(default=0.5)  # loss_layer
     
     reg_learning_rate: float = field(default=1e-1)
     
@@ -82,10 +82,9 @@ class TrainingArguments(DefaultTrainingArguments):
     )
     
     def get_file_name(self):
-        return "[{}]-[{}]-[{:.2f}]".format(
+        return "[{}]-[{}]".format(
             self.dataset_name,
             self.task_name,
-            self.structural_target_sparsity
         )
     
     def __post_init__(self):

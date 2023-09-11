@@ -3,6 +3,7 @@ import sys
 import random
 import numpy as np
 import torch
+import torch.nn as nn
 import logging
 import transformers
 from transformers import (
@@ -173,7 +174,14 @@ def evaluate(
 
         evaluator.log_metrics(metric_name, metrics)
         evaluator.save_metrics(metric_name, combined if task is not None and "mnli" in task else metrics)
-    
+
+
+def get_num_params(model: nn.Module):
+    num_params = 0
+    for params in model.parameters():
+        num_params += params.view(-1).shape[0]
+    return num_params
+
 
 def run():
     args, training_args = parse_hf_args()
@@ -232,8 +240,15 @@ def run():
         torch.save(s_model.state_dict(), s_model_path)
     else:
         s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
+
+    s_output_dir = "{}-[{:.2f}]".format(
+        training_args.output_dir,
+        training_args.structural_target_sparsity
+    )
+    os.makedirs(s_output_dir, exist_ok=True)
     
     distill_args = get_distill_args(training_args)
+    distill_args.output_dir = s_output_dir
     distill_trainer = DistillTrainer(
         s_model,
         t_model,
@@ -252,7 +267,7 @@ def run():
     if training_args.skip_stage == 3:
         exit(0)
     
-    s_model_path = os.path.join(training_args.output_dir, "smodel_distill.bin")
+    s_model_path = os.path.join(s_output_dir, "smodel_distill.bin")
     if training_args.train_student:
         
         train_result = distill_trainer.train()
@@ -271,8 +286,8 @@ def run():
     if training_args.skip_stage == 4:
         exit(0)
 
-    p_model_path = os.path.join(training_args.output_dir, "pmodel_init.bin")
-    p_model_config_path = os.path.join(training_args.output_dir, "pmodel_config.bin")
+    p_model_path = os.path.join(s_output_dir, "pmodel_init.bin")
+    p_model_config_path = os.path.join(s_output_dir, "pmodel_config.bin")
     if training_args.mix_compactor:
         p_model: PModel = CompactorMixer(
             training_args,
@@ -288,6 +303,7 @@ def run():
     
     p_model.config.per_layer_config = None
     training_args.num_train_epochs = 1.0
+    training_args.output_dir = s_output_dir
     final_trainer = DefaultTrainer(
         p_model,
         args=training_args,
@@ -297,9 +313,17 @@ def run():
         compute_metrics=compute_metrics,
     )
     evaluate(training_args, datasets, final_trainer, "eval_pmodel_init")
+    
+    exit(0)
 
     final_trainer.train()
 
     evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
     
-    torch.save(p_model.state_dict(), os.path.join(training_args.output_dir, "pmodel_final.bin"))
+    torch.save(p_model.state_dict(), os.path.join(s_output_dir, "pmodel_final.bin"))
+
+    p_params = get_num_params(p_model)
+    t_params = get_num_params(t_model)
+    logger.info("p-params = {:.3f}".format(p_params))
+    logger.info("t-params = {:.3f}".format(t_params))
+    logger.info("real sparsity = {:.3f}".format(p_params / t_params))

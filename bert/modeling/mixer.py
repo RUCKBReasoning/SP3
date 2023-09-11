@@ -105,8 +105,8 @@ class LinearMixer:
     @torch.no_grad()
     def prune_qkv_head(self, 
         num_heads: int,
-        head_indices: torch.Tensor, 
-        head_values: Optional[torch.Tensor] = None
+        head_indices: torch.Tensor,
+        head_values: Optional[torch.Tensor] = None,
     ):
         if head_values is None:
             head_values = torch.ones_like(head_indices).type_as(self.linear.weight)
@@ -133,10 +133,7 @@ class LinearMixer:
     def prune_o_head(self,
         num_heads: int,
         head_indices: torch.Tensor, 
-        head_values: Optional[torch.Tensor] = None        
     ):
-        if head_values is None:
-            head_values = torch.ones_like(head_indices).type_as(self.linear.weight)
         num_res_heads = head_indices.shape[0]
         in_features = self.linear.in_features
         out_features = self.linear.out_features
@@ -147,7 +144,7 @@ class LinearMixer:
         )
 
         weight = self.linear.weight.view(out_features, num_heads, in_features // num_heads)
-        weight = (weight[:, head_indices, :] * head_values[None, :, None]).reshape(out_features, -1)
+        weight = (weight[:, head_indices, :]).reshape(out_features, -1)
         new_linear.weight.copy_(weight)
         
         bias = self.linear.bias if self.linear.bias is not None else None
@@ -159,6 +156,21 @@ class LinearMixer:
         self.linear.weight.mul_(scale)
         if self.linear.bias is not None:
             self.linear.bias.mul_(scale)
+        return self
+
+    def scale_heads(self, num_heads: int, scale: torch.Tensor):
+        I = self.linear.in_features
+        O = self.linear.out_features
+        weight = self.linear.weight.clone()
+        bias = self.linear.bias.clone()
+        weight = weight.reshape(num_heads, O // num_heads, I)
+        bias = bias.reshape(num_heads, O // num_heads)
+        weight *= scale[:, None, None]
+        bias *= scale[:, None]
+        weight = weight.reshape(O, I)
+        bias = bias.reshape(O)
+        self.linear.weight.copy_(weight)
+        self.linear.bias.copy_(bias)
         return self
 
     def unwrap(self) -> nn.Linear:
@@ -198,8 +210,11 @@ class CompactorMixer:
         self.model.to("cpu")
         self.model.eval()
         
-    @torch.no_grad()   
+    @torch.no_grad()
     def mix(self):
+        
+        # input_ids = torch.randint(0, 100, (1, 2))
+        # self.model(input_ids=input_ids)
         
         past_layer_norm = self.model.bert.embeddings.LayerNorm        
         num_layers = len(self.model.bert.encoder.layer)
@@ -227,14 +242,16 @@ class CompactorMixer:
             vo_values, vo_indices = v_module.mask.parse()
             ffn_values, ffn_indices = w2_module.mask.parse()
             head_values, head_indices = module.attention.self.mask.parse()
+
             MHA_z = module.attention.output.mask.deterministic_z()
             FFN_z = module.output.mask.deterministic_z()
             
-            module.attention.self.num_attention_heads = head_indices.shape[0]
+            # module.attention.self.head_score = nn.Parameter(head_values)
+            module.attention.self.num_attention_heads = head_values.shape[0]
 
-            if MHA_z.item() <= 1e-3:
+            if MHA_z.item() <= 0:
                 module.prune_MHA = True
-            if FFN_z.item() <= 1e-3:
+            if FFN_z.item() <= 0:
                 module.prune_FFN = True
             
             # 1. update layer-norm
@@ -267,13 +284,12 @@ class CompactorMixer:
             output = LinearMixer(
                     o_module.compactor.extract("input", vo_indices)
                 )\
+                .prune_o_head(num_heads, head_indices)\
                 .merge(o_module.extract())\
                 .scale(MHA_z.item())\
                 .merge(norm1_in_comp)\
-                .prune_o_head(num_heads, head_indices)\
                 .unwrap()
-
-
+            
             module.attention.self.query = query
             module.attention.self.key = key
             module.attention.self.value = value
@@ -338,9 +354,11 @@ class CompactorMixer:
         p_config = get_packed_bert_config(self.model)
         p_model: PModels = self.factory(p_config)
         p_model.load_state_dict(self.model.state_dict(), strict=False)
-        
-        print(p_model)
-        
+
+        # p_model.eval()
+        # p_model(input_ids=input_ids)
+        # exit(0)
+
         return p_model
 
 # # TEST

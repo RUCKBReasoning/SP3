@@ -160,7 +160,6 @@ class DistillTrainer(DefaultTrainer):
         for name, module in self.model.named_modules():
             if isinstance(module, Mask) and module.features <= self.model.config.num_attention_heads:
                 module.set_state(activate)
-                print("set {} with state: [{}]".format(name, activate))
 
     def create_optimizer(self):
         """
@@ -253,14 +252,13 @@ class DistillTrainer(DefaultTrainer):
         # Distill Loss
         if self.distill_switch:
             assert isinstance(outputs, dict)
-            alpha_1 = self.args.distill_alpha_1
             distill_loss = self.compute_distill_loss(
                 unwrap_model(model),
                 inputs, 
                 outputs["logits"], 
                 outputs["hidden_states"]
             )
-            loss = (1 - alpha_1) * loss + distill_loss
+            loss = loss + distill_loss
         
         # Lagrangian Loss
         if self.reg_switch:
@@ -368,7 +366,6 @@ class DistillTrainer(DefaultTrainer):
                 else torch.tensor([1.0]).type_as(MHA_mask.log_alpha)
             head_mask_L = head_mask.L() if self.structural_switch \
                 else torch.tensor([1.0]).type_as(head_mask.log_alpha)
-            # head_mask_L = torch.tensor([1.0]).type_as(head_mask.log_alpha)
             FFN_mask_L = FFN_mask.L() if self.structural_switch \
                 else torch.tensor([1.0]).type_as(FFN_mask.log_alpha)
             for in_mask, out_mask in (

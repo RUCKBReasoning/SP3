@@ -469,6 +469,7 @@ class CompactBertSelfAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
+        
         self.mask = Mask(self.num_attention_heads)  # Mask of each attention head
 
         q_mask = Mask(self.attention_head_size, self.num_attention_heads)
@@ -526,7 +527,7 @@ class CompactBertSelfAttention(nn.Module):
         else:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
             value_layer = self.transpose_for_scores(self.value(hidden_states))
-            value_layer = value_layer * self.mask()[None, :, None, None]
+            # value_layer = value_layer * self.mask()[None, :, None, None]
 
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
@@ -575,6 +576,7 @@ class CompactBertSelfAttention(nn.Module):
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
+        attention_probs = attention_probs * self.mask()[None, :, None, None]
 
         context_layer = torch.matmul(attention_probs, value_layer)  # [batch, head, seq_length, hidden_size]
 

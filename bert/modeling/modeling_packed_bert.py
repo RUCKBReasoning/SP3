@@ -482,13 +482,14 @@ class PackedBertSelfAttention(nn.Module):
 
         self.num_attention_heads = layer_config.num_heads
         self.attention_head_size = layer_config.qk_dim // self.num_attention_heads
-        self.origin_head_size = config.hidden_size // self.num_attention_heads
+        self.origin_head_size = config.hidden_size // config.num_attention_heads
         self.all_qk_dim = layer_config.qk_dim
         self.all_vo_dim = layer_config.vo_dim
 
         self.query = nn.Linear(layer_config.input_dim, self.all_qk_dim)
         self.key = nn.Linear(layer_config.input_dim, self.all_qk_dim)
         self.value = nn.Linear(layer_config.input_dim, self.all_vo_dim)
+        self.head_score = nn.Parameter(torch.ones((self.num_attention_heads,)))
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.position_embedding_type = position_embedding_type or getattr(
