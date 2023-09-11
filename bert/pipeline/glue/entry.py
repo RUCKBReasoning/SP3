@@ -271,7 +271,7 @@ def run():
     if training_args.skip_stage == 4:
         exit(0)
 
-    p_model_path = os.path.join(training_args.output_dir, "pmodel.bin")
+    p_model_path = os.path.join(training_args.output_dir, "pmodel_init.bin")
     p_model_config_path = os.path.join(training_args.output_dir, "pmodel_config.bin")
     if training_args.mix_compactor:
         p_model: PModel = CompactorMixer(
@@ -296,7 +296,7 @@ def run():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    evaluate(training_args, datasets, final_trainer, "eval_pmodel")
+    evaluate(training_args, datasets, final_trainer, "eval_pmodel_init")
 
     final_trainer.train()
 
