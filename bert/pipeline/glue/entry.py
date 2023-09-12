@@ -178,8 +178,9 @@ def evaluate(
 
 def get_num_params(model: nn.Module):
     num_params = 0
-    for params in model.parameters():
-        num_params += params.view(-1).shape[0]
+    for name, params in model.named_parameters():
+        if 'encoder' in name:
+            num_params += params.view(-1).shape[0]
     return num_params
 
 
@@ -272,7 +273,7 @@ def run():
         
         train_result = distill_trainer.train()
         metrics = train_result.metrics
-        metrics["distill_samples"] = len(train_dataset)
+        metrics["distill_samples"] = len(train_dataset)    
 
         distill_trainer.log_metrics("distill", metrics)
         distill_trainer.save_metrics("distill", metrics)
@@ -314,8 +315,6 @@ def run():
     )
     evaluate(training_args, datasets, final_trainer, "eval_pmodel_init")
     
-    exit(0)
-
     final_trainer.train()
 
     evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
@@ -327,3 +326,4 @@ def run():
     logger.info("p-params = {:.3f}".format(p_params))
     logger.info("t-params = {:.3f}".format(t_params))
     logger.info("real sparsity = {:.3f}".format(p_params / t_params))
+    final_trainer.save_metrics("sparsity", {"sparsity": p_params / t_params})

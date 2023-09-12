@@ -54,7 +54,7 @@ class TrainingArguments(DefaultTrainingArguments):
     
     distill_T: float = field(default=2.0)
     distill_alpha_1: float = field(default=0.5)  # loss_pred
-    distill_alpha_2: float = field(default=0.5)  # loss_layer
+    distill_alpha_2: float = field(default=1.0)  # loss_layer
     
     reg_learning_rate: float = field(default=1e-1)
     
