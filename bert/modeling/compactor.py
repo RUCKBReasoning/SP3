@@ -31,7 +31,7 @@ class Mask(nn.Module):
         self.activate = nn.Parameter(torch.tensor(False), requires_grad=False)
         self.features = features * repeat
         self.repeat = repeat
-        self.beta = 0.5
+        self.beta = 2. / 3.
         self.log_alpha = nn.Parameter(torch.zeros((features,)))
         self.sampler = torch.distributions.Uniform(self.eps, 1. - self.eps)
         self.set_params(10.0)

@@ -178,10 +178,13 @@ def evaluate(
 
 def get_num_params(model: nn.Module):
     num_params = 0
+    num_params_without_residual = 0
     for name, params in model.named_parameters():
         if 'encoder' in name:
             num_params += params.view(-1).shape[0]
-    return num_params
+            if 'residual' not in name:
+                num_params_without_residual += params.view(-1).shape[0]
+    return num_params, num_params_without_residual
 
 
 def run():
@@ -315,15 +318,20 @@ def run():
     )
     evaluate(training_args, datasets, final_trainer, "eval_pmodel_init")
     
-    final_trainer.train()
+    # final_trainer.train()
+    # evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
+    # torch.save(p_model.state_dict(), os.path.join(s_output_dir, "pmodel_final.bin"))
 
-    evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
-    
-    torch.save(p_model.state_dict(), os.path.join(s_output_dir, "pmodel_final.bin"))
-
-    p_params = get_num_params(p_model)
-    t_params = get_num_params(t_model)
+    p_params, p_params_without_residual = get_num_params(p_model)
+    t_params, _ = get_num_params(t_model)
     logger.info("p-params = {:.3f}".format(p_params))
+    logger.info("p-params-without-residual = {:.3f}".format(p_params_without_residual))
     logger.info("t-params = {:.3f}".format(t_params))
     logger.info("real sparsity = {:.3f}".format(p_params / t_params))
-    final_trainer.save_metrics("sparsity", {"sparsity": p_params / t_params})
+    logger.info("real sparsity without residual = {:.3f}".format(p_params_without_residual / t_params))
+    final_trainer.save_metrics("sparsity", {
+        "num_params": p_params,
+        "num_params_without_residual": p_params_without_residual,
+        "sparsity": p_params / t_params,
+        "sparsity__without_residual": p_params_without_residual / t_params,
+    })

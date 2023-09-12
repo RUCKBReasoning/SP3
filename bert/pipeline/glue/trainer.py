@@ -258,7 +258,7 @@ class DistillTrainer(DefaultTrainer):
                 outputs["logits"], 
                 outputs["hidden_states"]
             )
-            loss = loss + distill_loss
+            loss = 0. * loss + distill_loss
         
         # Lagrangian Loss
         if self.reg_switch:
@@ -291,8 +291,7 @@ class DistillTrainer(DefaultTrainer):
         mask: torch.Tensor = inputs["attention_mask"]
         D = s_logits.shape[-1]
         T = self.args.distill_T
-        alpha_1 = self.args.distill_alpha_1
-        alpha_2 = self.args.distill_alpha_2
+        distill_lambda = self.args.distill_lambda
         
         pred_loss = self.kl_loss(
             torch.log_softmax(s_logits / T, dim=-1),
@@ -322,7 +321,7 @@ class DistillTrainer(DefaultTrainer):
             _layer_loss.append(self.mse_loss(t_h, s_h))
         layer_loss = torch.stack(_layer_loss).sum()
         
-        distill_loss = alpha_1 * pred_loss + alpha_2 * layer_loss
+        distill_loss = distill_lambda * pred_loss + (1.0 - distill_lambda) * layer_loss
         
         return distill_loss
     

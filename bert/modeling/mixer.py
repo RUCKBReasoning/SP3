@@ -158,21 +158,6 @@ class LinearMixer:
             self.linear.bias.mul_(scale)
         return self
 
-    def scale_heads(self, num_heads: int, scale: torch.Tensor):
-        I = self.linear.in_features
-        O = self.linear.out_features
-        weight = self.linear.weight.clone()
-        bias = self.linear.bias.clone()
-        weight = weight.reshape(num_heads, O // num_heads, I)
-        bias = bias.reshape(num_heads, O // num_heads)
-        weight *= scale[:, None, None]
-        bias *= scale[:, None]
-        weight = weight.reshape(O, I)
-        bias = bias.reshape(O)
-        self.linear.weight.copy_(weight)
-        self.linear.bias.copy_(bias)
-        return self
-
     def unwrap(self) -> nn.Linear:
         return self.linear
 

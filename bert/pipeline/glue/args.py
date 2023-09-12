@@ -48,17 +48,16 @@ class TrainingArguments(DefaultTrainingArguments):
     train_student: Optional[bool] = field(default=False)
     mix_compactor: Optional[bool] = field(default=False)
 
-    target_sparsity: Optional[float] = field(default=0.05)
-    structural_target_sparsity: Optional[float] = field(default=0.01)
+    target_sparsity: Optional[float] = field(default=0.1)
+    structural_target_sparsity: Optional[float] = field(default=0.05)
     # sparsity = (new params number) / (origin params number)
     
     distill_T: float = field(default=2.0)
-    distill_alpha_1: float = field(default=0.5)  # loss_pred
-    distill_alpha_2: float = field(default=1.0)  # loss_layer
+    distill_lambda: float = field(default=0.3)  # lambda * loss_pred + (1 - lambda) * loss_layer
     
     reg_learning_rate: float = field(default=1e-1)
     
-    distill_num_train_epochs: float = field(default=12.0, metadata={"help": "Total number of training epochs to perform."})
+    distill_num_train_epochs: float = field(default=20.0, metadata={"help": "Total number of training epochs to perform."})
     distill_learning_rate: float = field(default=2e-5, metadata={"help": "The initial learning rate for AdamW."})
     
     pruning_start_epoch: int = field(default=2)
