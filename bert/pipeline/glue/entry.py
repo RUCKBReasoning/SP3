@@ -200,7 +200,7 @@ def run():
     eval_dataset = datasets["validation_matched" if training_args.task_name == "mnli" else "validation"]
 
     # 1. Train teacher model
-    if training_args.skip_stage == 1:
+    if training_args.exit_stage == 1:
         exit(0)
 
     if training_args.train_teacher:
@@ -228,22 +228,25 @@ def run():
         t_model: TModel = TModel.from_pretrained(training_args.output_dir, config=config)
 
     # 2. Init compactor
-    if training_args.skip_stage == 2:
+    if training_args.exit_stage == 2:
         exit(0)
      
     s_model_path = os.path.join(training_args.output_dir, "smodel_init.bin")
     s_model = SModel(config)
-    if training_args.init_compactor:
-        s_model.load_state_dict(t_model.state_dict(), strict=False)
-        train_dataset = datasets["train"]
-        CompactorInitializer(
-            s_model,
-            train_dataset,
-            data_collator,
-        ).initialize()
-        torch.save(s_model.state_dict(), s_model_path)
+    if not training_args.skip_init_compactor:
+        if training_args.init_compactor:
+            s_model.load_state_dict(t_model.state_dict(), strict=False)
+            train_dataset = datasets["train"]
+            CompactorInitializer(
+                s_model,
+                train_dataset,
+                data_collator,
+            ).initialize()
+            torch.save(s_model.state_dict(), s_model_path)
+        else:
+            s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
     else:
-        s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
+        s_model.load_state_dict(t_model.state_dict(), strict=False)
 
     s_output_dir = "{}-[{:.2f}]".format(
         training_args.output_dir,
@@ -268,7 +271,7 @@ def run():
         evaluate(training_args, datasets, distill_trainer, "eval_smodel_init")
 
     # 3. Train Student with Knowledge Distill
-    if training_args.skip_stage == 3:
+    if training_args.exit_stage == 3:
         exit(0)
     
     s_model_path = os.path.join(s_output_dir, "smodel_distill.bin")
@@ -287,7 +290,7 @@ def run():
         s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
     
     # 4. Mix compactor
-    if training_args.skip_stage == 4:
+    if training_args.exit_stage == 4:
         exit(0)
 
     p_model_path = os.path.join(s_output_dir, "pmodel_init.bin")

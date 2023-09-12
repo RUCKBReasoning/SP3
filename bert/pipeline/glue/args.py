@@ -27,7 +27,8 @@ class ModelArguments:
 class TrainingArguments(DefaultTrainingArguments):
     
     # Other
-    skip_stage: int = field(default=5) # 4 stages
+    exit_stage: int = field(default=5) # 4 stages
+    skip_init_compcator: Optional[bool] = field(default=False)
 
     # Data
     dataset_dir: Optional[str] = field(default="../cache/datasets")
