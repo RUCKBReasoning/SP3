@@ -228,13 +228,14 @@ class CompactorMixer:
             ffn_values, ffn_indices = w2_module.mask.parse()
             head_values, head_indices = module.attention.self.mask.parse()
 
+            head_z = module.attention.self.mask.deterministic_z()
             MHA_z = module.attention.output.mask.deterministic_z()
             FFN_z = module.output.mask.deterministic_z()
             
             # module.attention.self.head_score = nn.Parameter(head_values)
             module.attention.self.num_attention_heads = head_values.shape[0]
 
-            if MHA_z.item() <= 0:
+            if MHA_z.item() <= 0 or head_z.sum().item() <= 0:
                 module.prune_MHA = True
             if FFN_z.item() <= 0:
                 module.prune_FFN = True

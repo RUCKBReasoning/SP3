@@ -116,16 +116,16 @@ def prepare_dataset(
     utils = BertGlueUtils()
     preprocess_fn = utils.get_map_fn(training_args.task_name, tokenizer)
     
-    datasets = raw_datasets.map(
-        preprocess_fn,
-        batched=True,
-        desc="Running tokenizer on dataset",
-    )
+    with training_args.main_process_first(desc="dataset map pre-processing"):
+        datasets = raw_datasets.map(
+            preprocess_fn,
+            batched=True,
+            desc="Running tokenizer on dataset",
+        )
     for key, dataset in datasets.items():
         datasets[key] = dataset.remove_columns(
             set(dataset.column_names) - set(utils.column_names)
         )
-    
     del_keys = [key for key in datasets.keys() if "test" in key]
     for key in del_keys:
         del datasets[key]
@@ -189,7 +189,7 @@ def get_num_params(model: nn.Module):
 
 def run():
     args, training_args = parse_hf_args()
-        
+    
     setup_seed(training_args)
     setup_logger(training_args)
     datasets, tokenizer, config, compute_metrics = prepare_dataset(args, training_args)
@@ -284,7 +284,8 @@ def run():
         distill_trainer.log_metrics("distill", metrics)
         distill_trainer.save_metrics("distill", metrics)
         
-        torch.save(s_model.state_dict(), s_model_path)
+        if training_args.local_rank == 0:
+            torch.save(s_model.state_dict(), s_model_path)
         evaluate(training_args, datasets, distill_trainer, "eval_smodel_distill")
     else:
         s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
@@ -301,8 +302,9 @@ def run():
             s_model,
             PModel,
         ).mix()
-        torch.save(p_model.config, p_model_config_path)
-        torch.save(p_model.state_dict(), p_model_path)
+        if training_args.local_rank == 0:
+            torch.save(p_model.config, p_model_config_path)
+            torch.save(p_model.state_dict(), p_model_path)
     else:
         p_config = torch.load(p_model_config_path)
         p_model = PModel(p_config)
@@ -327,11 +329,12 @@ def run():
 
     p_params, p_params_without_residual = get_num_params(p_model)
     t_params, _ = get_num_params(t_model)
-    logger.info("p-params = {:.3f}".format(p_params))
-    logger.info("p-params-without-residual = {:.3f}".format(p_params_without_residual))
-    logger.info("t-params = {:.3f}".format(t_params))
-    logger.info("real sparsity = {:.3f}".format(p_params / t_params))
-    logger.info("real sparsity without residual = {:.3f}".format(p_params_without_residual / t_params))
+    if training_args.local_rank == 0:
+        logger.info("p-params = {:.3f}".format(p_params))
+        logger.info("p-params-without-residual = {:.3f}".format(p_params_without_residual))
+        logger.info("t-params = {:.3f}".format(t_params))
+        logger.info("real sparsity = {:.3f}".format(p_params / t_params))
+        logger.info("real sparsity without residual = {:.3f}".format(p_params_without_residual / t_params))
     final_trainer.save_metrics("sparsity", {
         "num_params": p_params,
         "num_params_without_residual": p_params_without_residual,

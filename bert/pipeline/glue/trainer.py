@@ -55,12 +55,11 @@ class DistillTrainerCallback(TrainerCallback):
         self.pruning_warmup_steps = self.pruning_warmup_epoch * num_update_steps_per_epoch       
 
     def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        if state.epoch >= self.pruning_start_epoch \
-            and state.epoch < self.structural_pruning_start_epoch:
+        if state.epoch >= self.pruning_start_epoch:
             if self.trainer.reg_switch is False:
                 self.trainer.reg_switch = True
                 self.trainer.set_reg_params_state(True)
-        elif state.epoch >= self.structural_pruning_start_epoch:
+        if state.epoch >= self.structural_pruning_start_epoch:
             if self.trainer.structural_switch is False:
                 self.trainer.structural_switch = True
                 self.trainer.start_sparsity = self.args.target_sparsity
@@ -72,7 +71,7 @@ class DistillTrainerCallback(TrainerCallback):
             and state.epoch < self.structural_pruning_start_epoch:
             self.pruning_steps += 1
             self.trainer.reg_warmup_percent = min(1.0, self.pruning_steps / self.pruning_warmup_steps)
-        elif state.epoch >= self.structural_pruning_start_epoch:
+        if state.epoch >= self.structural_pruning_start_epoch:
             self.pruning_steps_stage2 += 1
             self.trainer.reg_warmup_percent = min(1.0, self.pruning_steps_stage2 / self.pruning_warmup_steps)
 
@@ -416,20 +415,21 @@ class DistillTrainer(DefaultTrainer):
         ignore_keys: Optional[List[str]] = None, 
         metric_key_prefix: str = "eval"
     ) -> Dict[str, float]:
-        with torch.no_grad():
-            lambda_1 = self.model.bert.reg_lambda_1.item()
-            lambda_2 = self.model.bert.reg_lambda_2.item()
-            sparsity = self.compute_sparsity()
-            t_sparsity = self.compute_target_sparsity()
-            per_layer_h_sparsity, per_layer_b_sparsity = self.compute_per_layer_sparsity()
-            per_layer_h_sparsity = np.array(per_layer_h_sparsity)
-            per_layer_b_sparsity = np.array(per_layer_b_sparsity)
-            lagrangian_loss = self.compute_lagrangian_loss()
-            logger.info("lambda-1: {}".format(lambda_1))
-            logger.info("lambda-2: {}".format(lambda_2))
-            logger.info("sparsity = {}".format(sparsity))
-            logger.info("t_sparsity = {}".format(t_sparsity))
-            logger.info("per_layer_h_sparsity = \n{}".format(per_layer_h_sparsity))
-            logger.info("per_layer_b_sparsity = \n{}".format(per_layer_b_sparsity))
-            logger.info("lagrangian_loss = {}".format(lagrangian_loss))
+        if self.args.local_rank == 0:
+            with torch.no_grad():
+                lambda_1 = self.model.bert.reg_lambda_1.item()
+                lambda_2 = self.model.bert.reg_lambda_2.item()
+                sparsity = self.compute_sparsity()
+                t_sparsity = self.compute_target_sparsity()
+                per_layer_h_sparsity, per_layer_b_sparsity = self.compute_per_layer_sparsity()
+                per_layer_h_sparsity = np.array(per_layer_h_sparsity)
+                per_layer_b_sparsity = np.array(per_layer_b_sparsity)
+                lagrangian_loss = self.compute_lagrangian_loss()
+                logger.info("lambda-1: {}".format(lambda_1))
+                logger.info("lambda-2: {}".format(lambda_2))
+                logger.info("sparsity = {}".format(sparsity))
+                logger.info("t_sparsity = {}".format(t_sparsity))
+                logger.info("per_layer_h_sparsity = \n{}".format(per_layer_h_sparsity))
+                logger.info("per_layer_b_sparsity = \n{}".format(per_layer_b_sparsity))
+                logger.info("lagrangian_loss = {}".format(lagrangian_loss))
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)

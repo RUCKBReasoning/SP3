@@ -28,7 +28,7 @@ class TrainingArguments(DefaultTrainingArguments):
     
     # Other
     exit_stage: int = field(default=5) # 4 stages
-    skip_init_compcator: Optional[bool] = field(default=False)
+    skip_init_compactor: Optional[bool] = field(default=False)
 
     # Data
     dataset_dir: Optional[str] = field(default="../cache/datasets")
