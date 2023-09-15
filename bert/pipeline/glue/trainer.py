@@ -287,7 +287,8 @@ class DistillTrainer(DefaultTrainer):
         s_hidden_states: torch.Tensor,
     ):
         with torch.no_grad():
-            t_outputs = self.t_model(**inputs, output_hidden_states=True)
+            assert "output_hidden_states" in inputs and inputs["output_hidden_states"] is True
+            t_outputs = self.t_model(**inputs)
             t_logits = t_outputs["logits"]
             t_hidden_states = t_outputs["hidden_states"]
 
