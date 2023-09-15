@@ -143,7 +143,7 @@ def prepare_dataset(
     
     return datasets, tokenizer, config, compute_metrics
 
-
+@torch.no_grad()
 def evaluate(
     training_args,
     datasets: DatasetDict,
@@ -270,6 +270,9 @@ def run():
     if training_args.init_compactor:
         evaluate(training_args, datasets, distill_trainer, "eval_smodel_init")
 
+    evaluate(training_args, datasets, distill_trainer, "eval_smodel_init")
+    exit(0)
+    
     # 3. Train Student with Knowledge Distill
     if training_args.exit_stage == 3:
         exit(0)

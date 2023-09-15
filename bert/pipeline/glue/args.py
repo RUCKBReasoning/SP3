@@ -41,6 +41,15 @@ class TrainingArguments(DefaultTrainingArguments):
         metadata={"help": "The name of the task to train on."},
         default="mrpc",
     )
+    max_seq_length: int = field(
+        default=128,
+        metadata={
+            "help": (
+                "The maximum total input sequence length after tokenization. Sequences longer "
+                "than this will be truncated, sequences shorter will be padded."
+            )
+        },
+    )
     
     # Training
     

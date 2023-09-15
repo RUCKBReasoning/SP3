@@ -228,7 +228,11 @@ class DistillTrainer(DefaultTrainer):
             labels = inputs.pop("labels")
         else:
             labels = None
-        outputs = model(**inputs, output_hidden_states=True)
+        if "output_hidden_states" in inputs:
+            inputs["output_hidden_states"] = inputs["output_hidden_states"] or self.distill_switch
+        else:
+            inputs["output_hidden_states"] = self.distill_switch
+        outputs = model(**inputs)
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -260,7 +264,7 @@ class DistillTrainer(DefaultTrainer):
             loss = 0. * loss + distill_loss
         
         # Lagrangian Loss
-        if self.reg_switch:
+        if self.distill_switch and self.reg_switch:
             lagrangian_loss = self.compute_lagrangian_loss()
             loss = loss + lagrangian_loss
 
@@ -432,4 +436,8 @@ class DistillTrainer(DefaultTrainer):
                 logger.info("per_layer_h_sparsity = \n{}".format(per_layer_h_sparsity))
                 logger.info("per_layer_b_sparsity = \n{}".format(per_layer_b_sparsity))
                 logger.info("lagrangian_loss = {}".format(lagrangian_loss))
-        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+        past_distill_switch = self.distill_switch
+        self.distill_switch = False
+        results = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+        self.distill_switch = past_distill_switch
+        return results
