@@ -313,7 +313,7 @@ def run():
     p_model.config.per_layer_config = None
     training_args.num_train_epochs = 1.0
     training_args.output_dir = s_output_dir
-    final_trainer = DefaultTrainer(
+    evaluator = DefaultTrainer(
         p_model,
         args=training_args,
         tokenizer=tokenizer,
@@ -321,11 +321,7 @@ def run():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    evaluate(training_args, datasets, final_trainer, "eval_pmodel_init")
-    
-    # final_trainer.train()
-    # evaluate(training_args, datasets, final_trainer, "eval_pmodel_final")
-    # torch.save(p_model.state_dict(), os.path.join(s_output_dir, "pmodel_final.bin"))
+    evaluate(training_args, datasets, evaluator, "eval_pmodel_init")
 
     p_params, p_params_without_residual = get_num_params(p_model)
     t_params, _ = get_num_params(t_model)
@@ -335,7 +331,7 @@ def run():
         logger.info("t-params = {:.3f}".format(t_params))
         logger.info("real sparsity = {:.3f}".format(p_params / t_params))
         logger.info("real sparsity without residual = {:.3f}".format(p_params_without_residual / t_params))
-    final_trainer.save_metrics("sparsity", {
+    evaluator.save_metrics("sparsity", {
         "num_params": p_params,
         "num_params_without_residual": p_params_without_residual,
         "sparsity": p_params / t_params,
