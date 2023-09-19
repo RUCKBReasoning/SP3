@@ -27,7 +27,8 @@ class ModelArguments:
 class TrainingArguments(DefaultTrainingArguments):
     
     # Other
-    skip_stage: int = field(default=5) # 4 stages
+    exit_stage: int = field(default=5) # 4 stages
+    skip_init_compactor: Optional[bool] = field(default=False)
 
     # Data
     dataset_dir: Optional[str] = field(default="../cache/datasets")
@@ -37,6 +38,22 @@ class TrainingArguments(DefaultTrainingArguments):
         default="glue",
     )
     
+    max_seq_length: int = field(
+        default=384,
+        metadata={
+            "help": (
+                "The maximum total input sequence length after tokenization. Sequences longer "
+                "than this will be truncated, sequences shorter will be padded."
+            )
+        },
+    )
+    pad_to_max_length: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to pad all samples to `max_seq_length`. "
+            "If False, will pad the samples dynamically when batching to the maximum length in the batch."
+        },
+    )
     version_2_with_negative: bool = field(
         default=False, metadata={"help": "If true, some of the examples do not have an answer."}
     )
@@ -75,19 +92,21 @@ class TrainingArguments(DefaultTrainingArguments):
     train_student: Optional[bool] = field(default=False)
     mix_compactor: Optional[bool] = field(default=False)
 
-    target_sparsity: Optional[float] = field(default=0.25)  
+    target_sparsity: Optional[float] = field(default=0.1)
+    structural_target_sparsity: Optional[float] = field(default=0.05)
     # sparsity = (new params number) / (origin params number)
     
     distill_T: float = field(default=2.0)
-    distill_alpha_1: float = field(default=0.5)  # loss_pred
-    distill_alpha_2: float = field(default=1.0)  # loss_layer
+    distill_lambda: float = field(default=0.3)  # lambda * loss_pred + (1 - lambda) * loss_layer
     
     reg_learning_rate: float = field(default=1e-1)
     
-    distill_num_train_epochs: float = field(default=10.0, metadata={"help": "Total number of training epochs to perform."})
+    distill_num_train_epochs: float = field(default=20.0, metadata={"help": "Total number of training epochs to perform."})
     distill_learning_rate: float = field(default=2e-5, metadata={"help": "The initial learning rate for AdamW."})
     
     pruning_start_epoch: int = field(default=2)
+    structural_pruning_start_epoch: int = field(default=6)
+
     pruning_warmup_epoch: int = field(default=2)
 
     # Overwrite 
@@ -106,9 +125,8 @@ class TrainingArguments(DefaultTrainingArguments):
     )
     
     def get_file_name(self):
-        return "[{}]-[{}]".format(
+        return "[{}]".format(
             self.dataset_name,
-            self.task_name
         )
     
     def __post_init__(self):

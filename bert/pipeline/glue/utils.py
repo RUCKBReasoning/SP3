@@ -31,7 +31,10 @@ class BertGlueUtils:
         'label',
     ]
 
-    def get_map_fn(self, task_name: str, tokenizer: BertTokenizer):
+    def get_map_fn(self, training_args, tokenizer: BertTokenizer):
+        task_name = training_args.task_name
+        max_length = training_args.max_seq_length
+        pad_to_max_length = training_args.pad_to_max_length
         sentence1_key, sentence2_key = self.gelu_task_to_keys[task_name]
 
         def map_fn(examples):
@@ -40,7 +43,11 @@ class BertGlueUtils:
                 (examples[sentence1_key],) if sentence2_key is None else (
                 examples[sentence1_key], examples[sentence2_key])
             )
-            result = tokenizer(*args, max_length=512, truncation=True)
+            result = tokenizer(*args, 
+                max_length=max_length, 
+                truncation=True,
+                padding="max_length" if pad_to_max_length else False
+            )
             return result
 
         return map_fn

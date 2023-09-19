@@ -114,7 +114,7 @@ def prepare_dataset(
     config = Config.from_pretrained(args.model_name, num_labels=num_labels)
 
     utils = BertGlueUtils()
-    preprocess_fn = utils.get_map_fn(training_args.task_name, tokenizer)
+    preprocess_fn = utils.get_map_fn(training_args, tokenizer)
     
     with training_args.main_process_first(desc="dataset map pre-processing"):
         datasets = raw_datasets.map(

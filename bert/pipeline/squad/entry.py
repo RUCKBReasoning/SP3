@@ -3,6 +3,7 @@ import sys
 import random
 import numpy as np
 import torch
+import torch.nn as nn
 import logging
 import transformers
 from transformers import (
@@ -10,8 +11,8 @@ from transformers import (
     EvalPrediction,
     DataCollatorWithPadding,
 )
-from transformers.models.bert.tokenization_bert_fast import (
-    BertTokenizer as Tokenizer
+from transformers import (
+    BertTokenizerFast as Tokenizer
 )
 from transformers.models.bert.modeling_bert import (
     BertConfig as Config,
@@ -100,10 +101,10 @@ def prepare_dataset(
     except:
         raise ValueError('dataset [{}] does not exist.'.format(
                 training_args.dataset_name))
-    
+        
     tokenizer = Tokenizer.from_pretrained(args.model_name, use_fast=args.use_fast)
     config = Config.from_pretrained(args.model_name)
-
+    
     utils = BertSquadUtils()
     train_map_fn = utils.get_train_map_fn(training_args, tokenizer)
     validation_map_fn = utils.get_validation_map_fn(training_args, tokenizer)
@@ -112,7 +113,6 @@ def prepare_dataset(
         raw_datasets["train"] = raw_datasets["train"].map(
             train_map_fn,
             batched=True,
-            num_proc=training_args.preprocessing_num_workers,
             remove_columns=utils.column_names,
             desc="Running tokenizer on train dataset",
         )
@@ -121,7 +121,6 @@ def prepare_dataset(
         raw_datasets["validation"] = raw_datasets["validation"].map(
             validation_map_fn,
             batched=True,
-            num_proc=training_args.preprocessing_num_workers,
             remove_columns=utils.column_names,
             desc="Running tokenizer on validation dataset",
         )
@@ -148,12 +147,24 @@ def evaluate(
 
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_dataset = datasets["validation"]
+    eval_examples = datasets["validation_examples"]
 
-    metrics = evaluator.evaluate(eval_dataset=eval_dataset)
+    metrics = evaluator.evaluate(eval_dataset=eval_dataset, eval_examples=eval_examples)
     metrics["eval_samples"] = len(eval_dataset)
 
     evaluator.log_metrics(metric_name, metrics)
     evaluator.save_metrics(metric_name, metrics)
+
+
+def get_num_params(model: nn.Module):
+    num_params = 0
+    num_params_without_residual = 0
+    for name, params in model.named_parameters():
+        if 'encoder' in name:
+            num_params += params.view(-1).shape[0]
+            if 'residual' not in name:
+                num_params_without_residual += params.view(-1).shape[0]
+    return num_params, num_params_without_residual
     
 
 def run():
@@ -166,10 +177,11 @@ def run():
     data_collator = DataCollatorWithPadding(tokenizer)
     
     train_dataset = datasets["train"]
-    eval_dataset = datasets["validation_matched" if training_args.task_name == "mnli" else "validation"]
+    eval_dataset = datasets["validation"]
+    eval_examples = datasets["validation_examples"]
 
     # 1. Train teacher model
-    if training_args.skip_stage == 1:
+    if training_args.exit_stage == 1:
         exit(0)
 
     if training_args.train_teacher:
@@ -179,6 +191,8 @@ def run():
             t_model,
             args=training_args,
             train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            eval_examples=eval_examples,
             tokenizer=tokenizer,
             data_collator=data_collator,
             post_process_function=post_processing_function,
@@ -198,31 +212,41 @@ def run():
         t_model: TModel = TModel.from_pretrained(training_args.output_dir, config=config)
 
     # 2. Init compactor
-    if training_args.skip_stage == 2:
+    if training_args.exit_stage == 2:
         exit(0)
      
     s_model_path = os.path.join(training_args.output_dir, "smodel_init.bin")
     s_model = SModel(config)
-    if training_args.init_compactor:
-        s_model.load_state_dict(t_model.state_dict(), strict=False)
-        train_dataset = datasets["train"]
-        CompactorInitializer(
-            s_model,
-            train_dataset,
-            data_collator,
-            training_args.target_sparsity
-        ).initialize()
-        torch.save(s_model.state_dict(), s_model_path)
+    if not training_args.skip_init_compactor:
+        if training_args.init_compactor:
+            s_model.load_state_dict(t_model.state_dict(), strict=False)
+            train_dataset = datasets["train"]
+            CompactorInitializer(
+                s_model,
+                train_dataset,
+                data_collator,
+            ).initialize()
+            torch.save(s_model.state_dict(), s_model_path)
+        else:
+            s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
     else:
-        s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
+        s_model.load_state_dict(t_model.state_dict(), strict=False)
+    
+    s_output_dir = "{}-[{:.2f}]".format(
+        training_args.output_dir,
+        training_args.structural_target_sparsity
+    )
+    os.makedirs(s_output_dir, exist_ok=True)
     
     distill_args = get_distill_args(training_args)
+    distill_args.output_dir = s_output_dir
     distill_trainer = DistillTrainer(
         s_model,
         t_model,
         args=distill_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        eval_examples=eval_examples,
         tokenizer=tokenizer,
         data_collator=data_collator,
         post_process_function=post_processing_function,
@@ -233,10 +257,10 @@ def run():
         evaluate(training_args, datasets, distill_trainer, "eval_smodel_init")
 
     # 3. Train Student with Knowledge Distill
-    if training_args.skip_stage == 3:
+    if training_args.exit_stage == 3:
         exit(0)
     
-    s_model_path = os.path.join(training_args.output_dir, "smodel_distill.bin")
+    s_model_path = os.path.join(s_output_dir, "smodel_distill.bin")
     if training_args.train_student:
         
         train_result = distill_trainer.train()
@@ -246,28 +270,35 @@ def run():
         distill_trainer.log_metrics("distill", metrics)
         distill_trainer.save_metrics("distill", metrics)
         
-        torch.save(s_model.state_dict(), s_model_path)
+        if training_args.local_rank == 0:
+            torch.save(s_model.state_dict(), s_model_path)
         evaluate(training_args, datasets, distill_trainer, "eval_smodel_distill")
     else:
         s_model.load_state_dict(torch.load(s_model_path, map_location="cpu"), strict=False)
     
     # 4. Mix compactor
-    if training_args.skip_stage == 4:
+    if training_args.exit_stage == 4:
         exit(0)
 
-    p_model_path = os.path.join(training_args.output_dir, "pmodel.bin")
+    p_model_path = os.path.join(s_output_dir, "pmodel.bin")
+    p_model_config_path = os.path.join(s_output_dir, "pmodel_config.bin")
     if training_args.mix_compactor:
         p_model: PModel = CompactorMixer(
             training_args,
             s_model,
             PModel,
         ).mix()
-        torch.save(p_model.state_dict(), p_model_path)
+        if training_args.local_rank == 0:
+            torch.save(p_model.config, p_model_config_path)
+            torch.save(p_model.state_dict(), p_model_path)
     else:
-        p_config = get_packed_bert_config(training_args, config)
+        p_config = torch.load(p_model_config_path)
         p_model = PModel(p_config)
         p_model.load_state_dict(torch.load(p_model_path, map_location="cpu"))
     
+    p_model.config.per_layer_config = None
+    training_args.num_train_epochs = 1.0
+    training_args.output_dir = s_output_dir
     evaluator = DefaultTrainer(
         p_model,
         args=training_args,
@@ -277,3 +308,18 @@ def run():
         compute_metrics=compute_metrics,
     )
     evaluate(training_args, datasets, evaluator, "eval_pmodel")
+
+    p_params, p_params_without_residual = get_num_params(p_model)
+    t_params, _ = get_num_params(t_model)
+    if training_args.local_rank == 0:
+        logger.info("p-params = {:.3f}".format(p_params))
+        logger.info("p-params-without-residual = {:.3f}".format(p_params_without_residual))
+        logger.info("t-params = {:.3f}".format(t_params))
+        logger.info("real sparsity = {:.3f}".format(p_params / t_params))
+        logger.info("real sparsity without residual = {:.3f}".format(p_params_without_residual / t_params))
+    evaluator.save_metrics("sparsity", {
+        "num_params": p_params,
+        "num_params_without_residual": p_params_without_residual,
+        "sparsity": p_params / t_params,
+        "sparsity__without_residual": p_params_without_residual / t_params,
+    })

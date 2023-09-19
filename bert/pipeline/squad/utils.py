@@ -3,6 +3,7 @@ import numpy as np
 from transformers import (
     BertTokenizer,
     EvalPrediction,
+    BertTokenizerFast,
 )
 from .qa_utils import (
     postprocess_qa_predictions,
@@ -14,28 +15,16 @@ class BertSquadUtils:
     question_column_name = "question"
     context_column_name = "context"
     answer_column_name = "answers"
-    column_names = ["question", "context", "answers"]
+    column_names = ['id', 'title', 'context', 'question', 'answers']
 
-    column_names = [
-        'input_ids',
-        'attention_mask',
-        'token_type_ids',
-        'position_ids',
-        'head_mask',
-        'inputs_embeds',
-        'output_attentions',
-        'output_hidden_states',
-        'return_dict',
-        'label',
-    ]
-        
     # Training preprocessing
     def get_train_map_fn(self, 
         args,
-        tokenizer: BertTokenizer, 
+        tokenizer: BertTokenizerFast, 
     ):
         doc_stride = args.doc_stride
         max_seq_length = args.max_seq_length
+        pad_to_max_length = args.pad_to_max_length
         pad_on_right = tokenizer.padding_side == "right"
         question_column_name = self.question_column_name
         context_column_name = self.context_column_name
@@ -58,9 +47,9 @@ class BertSquadUtils:
                 stride=doc_stride,
                 return_overflowing_tokens=True,
                 return_offsets_mapping=True,
-                padding=False,
+                padding="max_length" if pad_to_max_length else False,
             )
-
+            
             # Since one example might give us several features if it has a long context, we need a map from a feature to
             # its corresponding example. This key gives us just that.
             sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
@@ -126,7 +115,8 @@ class BertSquadUtils:
     ):
         doc_stride = args.doc_stride
         pad_on_right = tokenizer.padding_side == "right"
-        max_seq_length = tokenizer.model_max_length
+        max_seq_length = args.max_seq_length
+        pad_to_max_length = args.pad_to_max_length
         question_column_name = self.question_column_name
         context_column_name = self.context_column_name
         answer_column_name = self.answer_column_name        
@@ -149,7 +139,7 @@ class BertSquadUtils:
                 stride=doc_stride,
                 return_overflowing_tokens=True,
                 return_offsets_mapping=True,
-                padding=False,
+                padding="max_length" if pad_to_max_length else False,
             )
 
             # Since one example might give us several features if it has a long context, we need a map from a feature to
@@ -186,7 +176,7 @@ class BertSquadUtils:
         max_answer_length = args.max_answer_length
         null_score_diff_threshold = args.null_score_diff_threshold
         output_dir = args.output_dir
-        log_level = args.log_level
+        log_level = logging.INFO
         question_column_name = self.question_column_name
         context_column_name = self.context_column_name
         answer_column_name = self.answer_column_name
