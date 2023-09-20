@@ -86,6 +86,7 @@ class TrainingArguments(DefaultTrainingArguments):
     )
     
     # Training
+    target_score_field: Optional[str] = field(default=None)
     
     train_teacher: Optional[bool] = field(default=False)
     init_compactor: Optional[bool] = field(default=False)

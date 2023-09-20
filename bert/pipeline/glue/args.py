@@ -59,6 +59,7 @@ class TrainingArguments(DefaultTrainingArguments):
     )
     
     # Training
+    target_score_field: Optional[str] = field(default=None)
     
     train_teacher: Optional[bool] = field(default=False)
     init_compactor: Optional[bool] = field(default=False)
@@ -71,6 +72,7 @@ class TrainingArguments(DefaultTrainingArguments):
     
     distill_T: float = field(default=2.0)
     distill_lambda: float = field(default=0.3)  # lambda * loss_pred + (1 - lambda) * loss_layer
+    distill_residual: float = field(default=0.1)
     
     reg_learning_rate: float = field(default=1e-1)
     

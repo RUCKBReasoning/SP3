@@ -58,13 +58,13 @@ class DistillTrainerCallback(TrainerCallback):
         if state.epoch >= self.pruning_start_epoch:
             if self.trainer.reg_switch is False:
                 self.trainer.reg_switch = True
-                self.trainer.set_reg_params_state(True)
+                self.trainer.set_mask_group0_state(True)
         if state.epoch >= self.structural_pruning_start_epoch:
             if self.trainer.structural_switch is False:
                 self.trainer.structural_switch = True
                 self.trainer.start_sparsity = self.args.target_sparsity
                 self.trainer.target_sparsity = self.args.structural_target_sparsity
-                self.trainer.set_reg_structural_params_state(True)
+                self.trainer.set_mask_group1_state(True)
 
     def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.epoch >= self.pruning_start_epoch \
@@ -107,17 +107,38 @@ class DistillTrainer(DefaultTrainer):
         self.kl_loss = nn.KLDivLoss(reduction="batchmean", log_target=True)
         self.mse_loss = nn.MSELoss()
 
-        self.start_sparsity = 1.
+        self.start_sparsity = 1.16
         self.target_sparsity = self.args.target_sparsity
 
         self.reg_switch = False
         self.structural_switch = False
         self.reg_warmup_percent = 0.
         self.reg_params = []
-        self.reg_z_groups = []
+        self.mask_groups: Dict[int, List[Mask]] = {
+            0: [],
+            1: []
+        }
+        self.per_layer_mask_groups = []
         self.init_reg_params()
-        self.set_reg_params_state(False)
-        self.set_reg_structural_params_state(False)
+        self.set_mask_group0_state(False)
+        self.set_mask_group1_state(False)
+        
+        self.residual_params = []
+        self.init_residual_params()
+        
+        field_dict = {
+            "cola": "eval_matthews_correlation",
+            "mrpc": "eval_accuracy",
+            "rte": "eval_accuracy",
+            "stsb": "eval_spearmanr",
+        }
+
+        if args.target_score_field is None:
+            self.target_score_field = field_dict[args.task_name]
+        else:
+            args.target_score_field = args.target_score_field
+        self.best_score = None
+        self.best_state_dict = None
         
     def init_reg_params(self):
         for name, _ in self.model.named_parameters():
@@ -127,6 +148,7 @@ class DistillTrainer(DefaultTrainer):
                 self.reg_params.append(name)
         model: SModel = self.model
         past_layer_norm = model.bert.embeddings.LayerNorm
+        self.mask_groups[0].append(past_layer_norm.mask)
         for layer in model.bert.encoder.layer:
             hidden_mask0 = past_layer_norm.mask
             hidden_mask1 = layer.attention.output.LayerNorm.mask
@@ -137,7 +159,7 @@ class DistillTrainer(DefaultTrainer):
             MHA_mask = layer.attention.output.mask
             head_mask = layer.attention.self.mask
             FFN_mask = layer.output.mask
-            self.reg_z_groups.append((
+            self.per_layer_mask_groups.append((
                 hidden_mask0,
                 hidden_mask1,
                 hidden_mask2,
@@ -148,17 +170,39 @@ class DistillTrainer(DefaultTrainer):
                 head_mask,
                 FFN_mask,
             ))
+            self.mask_groups[0].extend([
+                hidden_mask1,
+                hidden_mask2,
+                qk_mask,
+                vo_mask,
+                filter_mask,                
+            ])
+            self.mask_groups[1].extend([
+                MHA_mask,
+                head_mask,
+                FFN_mask,
+            ])
             past_layer_norm = layer.output.LayerNorm
     
-    def set_reg_params_state(self, activate: bool):
-        for name, module in self.model.named_modules():
-            if isinstance(module, Mask) and module.features > self.model.config.num_attention_heads:
-                module.set_state(activate)
+    def set_mask_group0_state(self, activate: bool):
+        for module in self.mask_groups[0]:
+            module.set_state(activate)
     
-    def set_reg_structural_params_state(self, activate: bool):
-        for name, module in self.model.named_modules():
-            if isinstance(module, Mask) and module.features <= self.model.config.num_attention_heads:
-                module.set_state(activate)
+    def set_mask_group1_state(self, activate: bool):
+        for module in self.mask_groups[1]:
+            module.set_state(activate)
+    
+    def init_residual_params(self):
+        model: SModel = self.model
+        past_layer_norm = model.bert.embeddings.LayerNorm
+        for layer in model.bert.encoder.layer:
+            layer_norm1 = layer.attention.output.LayerNorm
+            layer_norm2 = layer.output.LayerNorm
+            self.residual_params.extend([
+                (past_layer_norm.out_comp.weight, layer_norm1.in_comp.weight),
+                (layer_norm1.out_comp.weight, layer_norm2.in_comp.weight),
+            ])
+            past_layer_norm = layer.output.LayerNorm
 
     def create_optimizer(self):
         """
@@ -215,6 +259,11 @@ class DistillTrainer(DefaultTrainer):
         self.distill_switch = True
         result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
         self.distill_switch = False
+
+        if self.best_state_dict is not None:
+            state_dict = {k: v.to(self.args.device) for k, v in self.best_state_dict.items()}
+            self.model.load_state_dict(state_dict)
+
         return result
 
 
@@ -267,6 +316,9 @@ class DistillTrainer(DefaultTrainer):
         if self.distill_switch and self.reg_switch:
             lagrangian_loss = self.compute_lagrangian_loss()
             loss = loss + lagrangian_loss
+            
+            # residual_loss = self.compute_residual_loss()
+            # loss = loss + residual_loss
 
         return (loss, outputs) if return_outputs else loss
     
@@ -329,6 +381,24 @@ class DistillTrainer(DefaultTrainer):
         
         return distill_loss
     
+    def compute_residual_loss(self):
+        _loss = []
+        for w0, w1 in self.residual_params:
+            w = w1 @ w0
+            w = w - torch.diag(torch.diag(w))
+            _loss.append(torch.norm(w))
+        loss = torch.stack(_loss).sum()
+        return loss * self.args.distill_residual
+
+    def compute_per_layer_residual_loss(self):
+        _loss = []
+        for w0, w1 in self.residual_params:
+            w = w1 @ w0
+            w = w - torch.diag(torch.diag(w))
+            _loss.append(torch.norm(w))
+        per_layer_loss = torch.stack(_loss).cpu().numpy()
+        return per_layer_loss
+    
     def compute_target_sparsity(self):
         start_sparsity = self.start_sparsity
         target_sparsity = self.target_sparsity
@@ -354,7 +424,7 @@ class DistillTrainer(DefaultTrainer):
         ffn_size = self.model.config.intermediate_size
         M = (hidden_size * hidden_size * 4 + hidden_size * ffn_size * 2) * num_layers
         params = []
-        for mask_group in self.reg_z_groups:
+        for mask_group in self.per_layer_mask_groups:
             hidden_mask0, \
             hidden_mask1, \
             hidden_mask2, \
@@ -389,6 +459,8 @@ class DistillTrainer(DefaultTrainer):
                 (hidden_mask2, filter_mask),
             ):
                 params.append((torch.outer(in_mask.L(), out_mask.L()) * FFN_mask_L).sum())
+            params.append(torch.outer(hidden_mask0.L(), hidden_mask1.L()).sum())
+            params.append(torch.outer(hidden_mask1.L(), hidden_mask2.L()).sum())
         s = torch.stack(params).sum() / M
         return s
 
@@ -404,7 +476,7 @@ class DistillTrainer(DefaultTrainer):
             ffn_norm = layer.output.LayerNorm
             h_sparsities.append(attn_norm.mask.L().sum().item() / attn_norm.mask.features)
             h_sparsities.append(ffn_norm.mask.L().sum().item() / ffn_norm.mask.features)
-        for mask_group in self.reg_z_groups:
+        for mask_group in self.per_layer_mask_groups:
             MHA_mask, \
             head_mask, \
             FFN_mask = mask_group[-3:]
@@ -426,19 +498,31 @@ class DistillTrainer(DefaultTrainer):
                 lambda_2 = self.model.bert.reg_lambda_2.item()
                 sparsity = self.compute_sparsity()
                 t_sparsity = self.compute_target_sparsity()
+                # per_layer_residual_loss = self.compute_per_layer_residual_loss()
                 per_layer_h_sparsity, per_layer_b_sparsity = self.compute_per_layer_sparsity()
                 per_layer_h_sparsity = np.array(per_layer_h_sparsity)
                 per_layer_b_sparsity = np.array(per_layer_b_sparsity)
                 lagrangian_loss = self.compute_lagrangian_loss()
+                logger.info("per_layer_h_sparsity = \n{}".format(per_layer_h_sparsity))
+                logger.info("per_layer_b_sparsity = \n{}".format(per_layer_b_sparsity))
+                # logger.info("per_layer_residual_loss = \n{}".format(per_layer_residual_loss))
                 logger.info("lambda-1: {}".format(lambda_1))
                 logger.info("lambda-2: {}".format(lambda_2))
                 logger.info("sparsity = {}".format(sparsity))
                 logger.info("t_sparsity = {}".format(t_sparsity))
-                logger.info("per_layer_h_sparsity = \n{}".format(per_layer_h_sparsity))
-                logger.info("per_layer_b_sparsity = \n{}".format(per_layer_b_sparsity))
                 logger.info("lagrangian_loss = {}".format(lagrangian_loss))
         past_distill_switch = self.distill_switch
         self.distill_switch = False
         results = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
         self.distill_switch = past_distill_switch
+        
+        sparsity_eps = 0.02
+        if self.args.local_rank == 0 and \
+            self.target_score_field in results and \
+            sparsity - self.args.structural_target_sparsity <= sparsity_eps and \
+            self.distill_switch is True:
+            if self.best_score is None or results[self.target_score_field] > self.best_score:
+                self.best_score = results[self.target_score_field]
+                self.best_state_dict = {k: v.to("cpu") for k, v in self.model.state_dict().items()}
+
         return results
