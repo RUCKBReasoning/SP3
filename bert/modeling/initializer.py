@@ -41,7 +41,7 @@ class CompactorInitializer:
         data_collator: DataCollator,
         sample_token_size: int = 8,
         sample_data_size: int = 512,
-        skip_num: int = 2,
+        skip_num: int = 3,
     ) -> None:
         self.model = model
         self.dataset = dataset
@@ -121,7 +121,6 @@ class CompactorInitializer:
             inps, outps = zip(*tensors)
             # [(sub_N, hidden_size,), ...]
             X = torch.concat(inps, dim=0)    # [N, D]
-            Y = torch.concat(outps, dim=0)   # [N, D]
             u, _, _ = torch.svd(X.T) # [D, N] -> [D, D], [D, D], [D, N]
                         
             w = layer_module.weight.clone()
@@ -190,13 +189,6 @@ class CompactorInitializer:
                 
                 v_module.compactor.weight.copy_(u)
                 o_module.compactor.weight.copy_(v)
-
-        logger.info("init ffn modules...")
-        for name, max_value in tqdm(self.ffn_dict.items()):
-            module: LinearWithMaskBefore = module_dict[name]
-            # indices = max_value.topk(k=ffn_k).indices
-            # module.mask.copy_(
-            #     torch.zeros_like(max_value).scatter(-1, indices, 1.0))
 
     def clear(self):
         for handler in self.handlers:

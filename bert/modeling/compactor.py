@@ -50,7 +50,10 @@ class Mask(nn.Module):
         log_alpha = self.log_alpha.repeat(self.repeat)
         x = (0 - self.min_s) / (self.max_s - self.min_s)
         logits = math.log(x) - math.log(1 - x)
-        return torch.sigmoid(log_alpha - logits * self.beta).clamp(min=self.eps, max=1-self.eps)
+        L = torch.sigmoid(log_alpha - logits * self.beta).clamp(min=self.eps, max=1-self.eps)
+        if not self.activate.item():
+            L = L.detach()
+        return L
 
     def sample_z(self):  # z -> mask
         log_alpha = self.log_alpha.repeat(self.repeat)
@@ -78,7 +81,7 @@ class Mask(nn.Module):
             else:
                 return self.deterministic_z()
         else:
-            return torch.ones((self.features,)).type_as(self.log_alpha)
+            return self.deterministic_z().detach()
 
     @torch.no_grad()
     def parse(self):
@@ -88,7 +91,8 @@ class Mask(nn.Module):
         num_non_zeros = sub_features - num_zeros
         z = torch.sigmoid(self.log_alpha / self.beta * self.magical_number)
 
-        _, indices = torch.topk(z, k=num_non_zeros)
+        indices = torch.topk(z, k=num_non_zeros).indices
+        indices = torch.sort(indices).values
         if self.repeat > 1:  # shape: (num_heads, head_dim)
             z = z.repeat(self.repeat)
             indices = torch.concat(tuple(indices + i * sub_features for i in range(self.repeat)))
@@ -170,9 +174,9 @@ class LayerNormWithCompactor(nn.LayerNorm):
         # comp -> Compactor
         self.mask = Mask(normalized_shape)
         self.in_comp = Compactor(
-            normalized_shape, bias=compactor_bias, mask_pos="output", mask=self.mask)
+            normalized_shape, bias=compactor_bias, mask_pos="no", mask=self.mask)
         self.out_comp = Compactor(
-            normalized_shape, bias=compactor_bias, mask_pos="input", mask=self.mask)
+            normalized_shape, bias=compactor_bias, mask_pos="no", mask=self.mask)
         self.kw_args = {
             "normalized_shape": normalized_shape,
             "packed_size": normalized_shape,
@@ -186,17 +190,13 @@ class LayerNormWithCompactor(nn.LayerNorm):
         return super().forward(x)
     
     def forward(self, x: Tensor) -> Tensor:
+        z = self.mask()
         x = self.in_comp(x)
+        x = x * z
         x = super().forward(x)
+        x = x * z
         x = self.out_comp(x)
         return x
-
-    def forward_with_outputs(self, x: Tensor) -> Tensor:
-        x0 = self.in_comp(x)
-        x1 = super().forward(x0)
-        x2 = self.out_comp(x1)
-        return x2, (x0, x1, x2)
-
     
     def get_hook_fn(self, act_dict, name, size):
         return lambda module, inp, outp: act_dict[name].append(sample((inp[0], outp), size))

@@ -250,7 +250,7 @@ def run():
 
     s_output_dir = "{}-[{:.2f}]".format(
         training_args.output_dir,
-        training_args.structural_target_sparsity
+        training_args.target_sparsity
     )
     os.makedirs(s_output_dir, exist_ok=True)
     
