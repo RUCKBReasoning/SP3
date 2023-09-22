@@ -122,6 +122,10 @@ class DistillTrainer(DefaultTrainer):
             "mrpc": "eval_accuracy",
             "rte": "eval_accuracy",
             "stsb": "eval_spearmanr",
+            "sst2": "eval_accuracy",
+            "qnli": "eval_accuracy",            
+            "mnli": "eval_accuracy",
+            "qqp": "eval_accuracy",
         }
 
         if args.target_score_field is None:
