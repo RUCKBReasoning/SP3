@@ -955,6 +955,8 @@ class PackedBertModel(BertPreTrainedModel):
 
         if add_pooling_layer:
             self.pooler = PackedBertPooler(config)
+        else:
+            self.pooler = None
         
         # Initialize weights and apply final processing
         self.post_init()
