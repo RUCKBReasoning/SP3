@@ -170,6 +170,7 @@ class DistillTrainerCallback(TrainerCallback):
         self.trainer = trainer
         self.pruning_start_epoch = self.args.pruning_start_epoch
         self.pruning_warmup_epoch = self.args.pruning_warmup_epoch
+        self.structural_pruning_start_epoch = self.args.structural_pruning_start_epoch
         self.pruning_steps = 0
         self.pruning_warmup_steps = None
     
@@ -182,13 +183,19 @@ class DistillTrainerCallback(TrainerCallback):
 
     def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.epoch >= self.pruning_start_epoch:
-            self.trainer.reg_switch = True
-            self.trainer.set_reg_params_state(True)
+            if self.trainer.pruning_switch is False:
+                self.trainer.pruning_switch = True
+                self.trainer.set_mask_group0_state(True)
+        if state.epoch >= self.structural_pruning_start_epoch:
+            if self.trainer.use_structural_pruning and \
+                    self.trainer.structural_pruning_switch is False:
+                self.trainer.structural_pruning_switch = True
+                self.trainer.set_mask_group1_state(True)
         
     def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.epoch >= self.pruning_start_epoch:
             self.pruning_steps += 1
-            self.trainer.reg_warmup_percent = min(1.0, self.pruning_steps / self.pruning_warmup_steps)
+            self.trainer.pruning_warmup_percent = min(1.0, self.pruning_steps / self.pruning_warmup_steps)
 
 
 class DistillTrainer(DefaultTrainer):
