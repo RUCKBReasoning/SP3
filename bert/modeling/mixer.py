@@ -312,8 +312,6 @@ class CompactorMixer:
         
         first_values, first_indices = first_norm.mask.parse()
         last_values, last_indices = last_norm.mask.parse()
-
-        assert self.model.bert.pooler is not None
         
         first_in_comp = first_norm.in_comp.extract("output", first_indices, first_values)
         first_norm = first_norm.extract(first_indices)
@@ -329,21 +327,26 @@ class CompactorMixer:
         embeddings.token_type_embeddings = EmbeddingMixer(embeddings.token_type_embeddings)\
             .merge(first_in_comp)\
             .unwrap()
-
         embeddings.LayerNorm = first_norm
-        self.model.bert.pooler.dense = LinearMixer(
+        
+        if self.model.bert.pooler is not None:
+            assert isinstance(self.model, CompactBertForSequenceClassification)
+            self.model.bert.pooler.dense = LinearMixer(
+                    last_norm.out_comp.extract("input", last_indices, last_values)
+                )\
+                .merge(self.model.bert.pooler.dense)\
+                .unwrap()
+        else:
+            assert isinstance(self.model, CompactBertForQuestionAnswering)
+            self.model.qa_outputs = LinearMixer(
                 last_norm.out_comp.extract("input", last_indices, last_values)
             )\
-            .merge(self.model.bert.pooler.dense)\
+            .merge(self.model.qa_outputs)\
             .unwrap()
 
         p_config = get_packed_bert_config(self.model)
         p_model: PModels = self.factory(p_config)
         p_model.load_state_dict(self.model.state_dict(), strict=False)
-
-        # p_model.eval()
-        # p_model(input_ids=input_ids)
-        # exit(0)
 
         return p_model
 
