@@ -1236,9 +1236,10 @@ class PackedBertForQuestionAnswering(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
+        last_hidden_size = config.per_layer_config[-1].ffn_output_dim
 
         self.bert = PackedBertModel(config, add_pooling_layer=False)
-        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        self.qa_outputs = nn.Linear(last_hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
