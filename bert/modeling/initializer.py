@@ -114,7 +114,7 @@ class CompactorInitializer:
         logger.info("init layer modules...")
 
         for i, (name, tensors) in tqdm(enumerate(self.layer_dict.items()), total=len(self.layer_dict)):
-            if i < self.skip_num:  # skip first 2 LayerNorm
+            if i < self.skip_num:  # skip first 3 LayerNorm
                 logger.info("skip {}".format(name))
                 continue
             layer_module: LayerNormWithCompactor = module_dict[name]
