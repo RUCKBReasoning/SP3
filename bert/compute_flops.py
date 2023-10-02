@@ -13,3 +13,6 @@ p_model = PModel(p_config)
 p_model.load_state_dict(torch.load(p_model_path, map_location="cpu"))
 
 input_ids = torch.randint(0, 1000, size=(1, 512))
+
+flops = FlopCountAnalysis(p_model, (input_ids,))
+print(flops.total())
