@@ -90,6 +90,9 @@ class Mask(nn.Module):
         num_zeros = round(sub_features - Lc.item())
         num_non_zeros = sub_features - num_zeros
         z = torch.sigmoid(self.log_alpha / self.beta * self.magical_number)
+        
+        if num_non_zeros < 1:
+            num_non_zeros = 1
 
         indices = torch.topk(z, k=num_non_zeros).indices
         indices = torch.sort(indices).values
