@@ -241,6 +241,8 @@ def run():
                 s_model,
                 train_dataset,
                 data_collator,
+                sample_token_size=training_args.sample_token_size,
+                sample_data_size=training_args.sample_data_size,
             ).initialize()
             torch.save(s_model.state_dict(), s_model_path)
         else:

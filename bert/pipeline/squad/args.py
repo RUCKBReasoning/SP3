@@ -84,6 +84,9 @@ class TrainingArguments(DefaultTrainingArguments):
             )
         },
     )
+    # Sample
+    sample_token_size: Optional[int] = field(default=8)
+    sample_data_size: Optional[int] = field(default=512)
     
     # Training
     target_score_field: Optional[str] = field(default=None)
