@@ -133,9 +133,19 @@ def draw_figure3(p_config, name, dataset_name):
     plt.close()
 
 
-def run():
-    dataset_name = "mrpc"
-    s_output_dir = "/data2/hyx/projects/tcsp_v2/cache/checkpoints/bert/[glue]-[{}]-[0.06]".format(dataset_name)
+def run_glue():
+    for dataset_name in ["mnli", "mrpc", "qnli", "qqp", "rte", "sst2", "stsb"]:
+        s_output_dir = "/data2/hyx/projects/tcsp_v2/cache/checkpoints/bert/[glue]-[{}]-[0.06]".format(dataset_name)
+        p_model_config_path = os.path.join(s_output_dir, "pmodel_config.bin")
+        p_config: PackedBertConfig = torch.load(p_model_config_path)
+
+        draw_figure1(p_config, "exp-fig1", dataset_name)
+        draw_figure2(p_config, "exp-fig2", dataset_name)
+        draw_figure3(p_config, "exp-fig3", dataset_name)
+
+def run_squad():
+    dataset_name = "squad"
+    s_output_dir = "/data2/hyx/projects/tcsp_v2/cache/checkpoints/bert/[squad]-[0.06]"
     p_model_config_path = os.path.join(s_output_dir, "pmodel_config.bin")
     p_config: PackedBertConfig = torch.load(p_model_config_path)
 
@@ -144,4 +154,5 @@ def run():
     draw_figure3(p_config, "exp-fig3", dataset_name)
 
 
-run()
+run_glue()
+run_squad()
