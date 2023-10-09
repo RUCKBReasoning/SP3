@@ -14,7 +14,7 @@ font = {
     "size": 17
 }
 
-def draw_figure1(p_config, name):
+def draw_figure1(p_config, name, dataset_name):
     per_layer_config: List[PackedBertLayerConfig] = p_config.per_layer_config
     hidden_size = p_config.hidden_size
     ffn_size = p_config.intermediate_size
@@ -53,10 +53,10 @@ def draw_figure1(p_config, name):
     ax.legend(loc='upper right', ncols=3, fontsize=16)
     ax.set_ylim(0, 25)
 
-    plt.savefig("tools/figures/{}.png".format(name))
+    plt.savefig("tools/figures/{}/{}.png".format(dataset_name, name))
     plt.close()
 
-def draw_figure2(p_config, name):
+def draw_figure2(p_config, name, dataset_name):
     per_layer_config: List[PackedBertLayerConfig] = p_config.per_layer_config
     num_heads = p_config.num_attention_heads
 
@@ -90,11 +90,11 @@ def draw_figure2(p_config, name):
     ax.legend(loc='upper right', ncols=3, fontsize=16)
     ax.set_ylim(0, 100)
 
-    plt.savefig("tools/figures/{}.png".format(name))
+    plt.savefig("tools/figures/{}/{}.png".format(dataset_name, name))
     plt.close()
 
 
-def draw_figure3(p_config, name):
+def draw_figure3(p_config, name, dataset_name):
     per_layer_config: List[PackedBertLayerConfig] = p_config.per_layer_config
     hidden_size = p_config.hidden_size
 
@@ -129,18 +129,19 @@ def draw_figure3(p_config, name):
     ax.legend(loc='upper right', ncols=3, fontsize=16)
     ax.set_ylim(0, 100)
 
-    plt.savefig("tools/figures/{}.png".format(name))
+    plt.savefig("tools/figures/{}/{}.png".format(dataset_name, name))
     plt.close()
 
 
 def run():
-    s_output_dir = "/data2/hyx/projects/tcsp_v2/cache/checkpoints/bert/[glue]-[mrpc]-[0.06]"
+    dataset_name = "mrpc"
+    s_output_dir = "/data2/hyx/projects/tcsp_v2/cache/checkpoints/bert/[glue]-[{}]-[0.06]".format(dataset_name)
     p_model_config_path = os.path.join(s_output_dir, "pmodel_config.bin")
     p_config: PackedBertConfig = torch.load(p_model_config_path)
 
-    draw_figure1(p_config, "exp-fig1")
-    draw_figure2(p_config, "exp-fig2")
-    draw_figure3(p_config, "exp-fig3")
+    draw_figure1(p_config, "exp-fig1", dataset_name)
+    draw_figure2(p_config, "exp-fig2", dataset_name)
+    draw_figure3(p_config, "exp-fig3", dataset_name)
 
 
 run()
