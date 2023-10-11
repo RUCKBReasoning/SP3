@@ -117,6 +117,9 @@ class DistillTrainer(DefaultTrainer):
         self.set_mask_group0_state(False)
         self.set_mask_group1_state(False)
         
+        self.ffn_masks: List[Mask] = []
+        self.init_ffn_masks()
+        
         field_dict = {
             "cola": "eval_matthews_correlation",
             "mrpc": "eval_accuracy",
@@ -186,6 +189,12 @@ class DistillTrainer(DefaultTrainer):
     def set_mask_group1_state(self, activate: bool):
         for module in self.mask_groups[1]:
             module.set_state(activate)
+    
+    def init_ffn_masks(self):
+        model: SModel = self.model
+        for layer in model.bert.encoder.layer:
+            FFN_mask = layer.output.mask
+            self.ffn_masks.append(FFN_mask)
 
     def create_optimizer(self):
         """
@@ -350,9 +359,13 @@ class DistillTrainer(DefaultTrainer):
         num_layers = len(s_hidden_states)
         for i in range(num_layers):
             match_index.append(dist[i, i:].argmin().item() + i)
+
+        # for i in range(1, num_layers):
+        #     match_index[i] = max(match_index[i], match_index[i - 1])
+        # * ffn_mask.L().detach()
         
         _layer_loss = []
-        for i, s_h in enumerate(s_hidden_states):
+        for i, (ffn_mask, s_h) in enumerate(zip(self.ffn_masks, s_hidden_states)):
             t_h = t_hidden_states[match_index[i]]
             _layer_loss.append(self.mse_loss(t_h, s_h))
         layer_loss = torch.stack(_layer_loss).sum()
