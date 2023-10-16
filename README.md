@@ -28,7 +28,7 @@ and to read the SQuAD dataset, we use the following command
 dataset = load_from_disk('[path to cache]/datasets/squad')
 ```
 
-When using this code, please download the dataset in advance in the format described above, or change the load_from_disk API to one that downloads the dataset directly over the network.
+when using this code, please download the dataset in advance in the format described above, or change the load_from_disk API to one that downloads the dataset directly over the network.
 
 ## scripts
 
@@ -51,5 +51,5 @@ CUDA_VISIBLE_DEVICES=0 python main.py --output_dir ../cache/checkpoints/bert --l
 ```bash
 cd bert
 
-CUDA_VISIBLE_DEVICES=3 python main.py --output_dir ../cache/checkpoints/bert --log_level info --train_student --mix_compactor --dataset_name=squad --target_sparsity=0.06 --use_structural_pruning
+CUDA_VISIBLE_DEVICES=0 python main.py --output_dir ../cache/checkpoints/bert --log_level info --train_student --mix_compactor --dataset_name=squad --target_sparsity=0.06 --use_structural_pruning
 ```
