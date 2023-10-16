@@ -12,4 +12,4 @@ CUDA_VISIBLE_DEVICES=3 python main.py --output_dir ../cache/checkpoints/bert --l
 
 # TMP
 
-CUDA_VISIBLE_DEVICES=0 python main.py --output_dir ../cache/checkpoints/bert --log_level info --train_student --mix_compactor --task_name=rte --target_sparsity=0.06 --use_structural_pruning --per_device_train_batch_size=32 --learning_rate=1e-5
+CUDA_VISIBLE_DEVICES=0 python main.py --output_dir ../cache/checkpoints/bert --log_level info --train_student --mix_compactor --task_name=rte --target_sparsity=0.06 --use_structural_pruning --per_device_train_batch_size=24 --learning_rate=1e-5
