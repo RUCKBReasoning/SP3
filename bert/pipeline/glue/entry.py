@@ -250,7 +250,7 @@ def run():
     else:
         s_model.load_state_dict(t_model.state_dict(), strict=False)
 
-    s_output_dir = "{}-[{:.2f}]-[dev]".format(
+    s_output_dir = "{}-[{:.2f}]".format(
         training_args.output_dir,
         training_args.target_sparsity
     )
