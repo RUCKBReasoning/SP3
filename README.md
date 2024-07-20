@@ -1,5 +1,7 @@
 # SP3
 
+officials implementation for [SP3: Enhancing Structured Pruning via PCA Projection](https://arxiv.org/abs/2308.16475)
+
 ## file structure
 
 bert: source code
